@@ -76,3 +76,55 @@ test('incomplete traceability is represented accurately', () => {
   assert.equal(res.supplyChainStatus, 'incomplete')
   assert.equal(res.dispensingStatus, 'not_dispensed')
 })
+
+test('accepted package from partially_received shipment verifies with complete traceability', () => {
+  const partialShipments = shipments.map(s =>
+    s.ref === 'SHP-0001' ? { ...s, status: 'partially_received', receiving: `Accepted ${TODAY}` } : s
+  )
+  const partialPackages = packages.map(p => {
+    if (p.serial === 'DEMO-PCM-2601-00001') {
+      return {
+        ...p,
+        custodian: 'd1',
+        status: 'accepted',
+        history: [...p.history, ['Custody accepted', 'd1', TODAY]]
+      }
+    }
+    if (p.serial === 'DEMO-PCM-2601-00010') {
+      return {
+        ...p,
+        status: 'discrepancy',
+        history: [...p.history, ['Package rejected on receiving', 'd1', TODAY]]
+      }
+    }
+    return p
+  })
+  const partialCtx = { packages: partialPackages, batches, shipments: partialShipments, today: TODAY }
+
+  const acceptedRes = verifySerial('DEMO-PCM-2601-00001', partialCtx)
+  assert.equal(acceptedRes.found, true)
+  assert.equal(acceptedRes.state, 'verified')
+  assert.equal(acceptedRes.authenticityStatus, 'verified')
+  assert.equal(acceptedRes.supplyChainStatus, 'accepted')
+
+  const rejectedRes = verifySerial('DEMO-PCM-2601-00010', partialCtx)
+  assert.equal(rejectedRes.found, true)
+  assert.equal(rejectedRes.state, 'incomplete')
+  assert.equal(rejectedRes.supplyChainStatus, 'incomplete')
+})
+
+test('quarantined package reports quarantined verification state accurately', () => {
+  const quarantinedPackages = packages.map(p =>
+    p.serial === 'DEMO-PCM-2601-00031' ? { ...p, status: 'quarantined' } : p
+  )
+  const res = verifySerial('DEMO-PCM-2601-00031', {
+    packages: quarantinedPackages,
+    batches,
+    shipments,
+    today: TODAY
+  })
+  assert.equal(res.found, true)
+  assert.equal(res.state, 'quarantined')
+  assert.equal(res.authenticityStatus, 'verified')
+  assert.equal(res.supplyChainStatus, 'quarantined')
+})

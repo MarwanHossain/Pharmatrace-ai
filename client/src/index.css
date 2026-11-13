@@ -2,3 +2,20 @@
 body{@apply bg-surface text-ink font-sans antialiased}
 .id-text{font-variant-numeric:tabular-nums;letter-spacing:.01em}
 :focus-visible{outline:2px solid #059669;outline-offset:2px}
+
+#pt-print-root{display:none}
+
+.pt-print-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4mm}
+.pt-label-card{break-inside:avoid;page-break-inside:avoid;background:#ffffff}
+
+@media print{
+  @page{size:A4 portrait;margin:10mm}
+  *{box-sizing:border-box;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+  html,body{background:#ffffff!important;margin:0!important;padding:0!important}
+  body > *:not(#pt-print-root){display:none!important}
+  #pt-print-root{display:block!important;width:100%!important;background:#ffffff!important}
+  .pt-print-grid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:4mm!important}
+  .pt-print-single{display:block!important;width:92mm!important}
+  .pt-label-card{border:1px solid #cbd5e1!important;border-radius:6px!important;padding:3mm!important;break-inside:avoid!important;page-break-inside:avoid!important;background:#ffffff!important}
+  .pt-label-qr svg{display:block!important;width:100%!important;height:100%!important}
+}

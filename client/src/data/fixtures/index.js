@@ -179,3 +179,30 @@ export const shipments = [
     receiving: 'Accepted 2026-11-02'
   }
 ]
+
+export const users = [
+  { id: 'u1', name: 'Admin User', email: 'admin@pharmatrace.demo', role: 'admin', orgId: null, status: 'active', created: '2026-01-01' },
+  { id: 'u2', name: 'Mfg Manager', email: 'mfg@meridian.demo', role: 'manufacturer', orgId: 'm1', status: 'active', created: '2026-01-05' },
+  { id: 'u3', name: 'Dist Operator', email: 'ops@corridor.demo', role: 'distributor', orgId: 'd1', status: 'active', created: '2026-02-10' },
+  { id: 'u4', name: 'Wholesale Lead', email: 'lead@riverside.demo', role: 'wholesaler', orgId: 'w1', status: 'active', created: '2026-03-01' },
+  { id: 'u5', name: 'Pharmacist', email: 'rx@greenleaf.demo', role: 'pharmacy', orgId: 'p1', status: 'active', created: '2026-03-15' },
+  { id: 'u6', name: 'Inv Officer', email: 'inv@pharmatrace.demo', role: 'investigator', orgId: null, status: 'active', created: '2026-04-01' },
+  { id: 'u7', name: 'Suspended User', email: 'suspended@demo.test', role: 'distributor', orgId: 'd1', status: 'suspended', created: '2026-05-20' }
+]
+
+export const alerts = [
+  { id: 'alt1', type: 'repeated_scan', serial: 'DEMO-PCM-2601-00046', severity: 'medium', created: '2026-11-10', status: 'open', description: 'Package scanned 3+ times across different locations' },
+  { id: 'alt2', type: 'incomplete_traceability', serial: 'DEMO-PCM-2601-00048', severity: 'high', created: '2026-11-11', status: 'open', description: 'Package arrived at pharmacy with missing chain-of-custody events' },
+  { id: 'alt3', type: 'expired_in_stock', batchNo: 'AMX-2603', severity: 'high', created: '2026-11-02', status: 'resolved', description: 'Batch AMX-2603 expired while 20 packages remain in manufacturer stock', resolvedDate: '2026-11-05' },
+  { id: 'alt4', type: 'unusual_pattern', serial: null, severity: 'low', created: '2026-11-08', status: 'open', description: 'Unusual shipment velocity detected for Corridor Distribution' }
+]
+
+export const investigations = [
+  { id: 'inv1', alertId: 'alt2', title: 'Missing traceability — Package 00048', status: 'open', assignee: 'u6', created: '2026-11-11', findings: 'Package arrived at Greenleaf Pharmacy without dispatch or intermediate custody records.', evidence: ['DEMO-PCM-2601-00048 history shows only serialization and final acceptance'], resolution: null },
+  { id: 'inv2', alertId: 'alt3', title: 'Expired batch AMX-2603 stock review', status: 'closed', assignee: 'u6', created: '2026-11-03', findings: 'Batch expired on 2026-11-01. All 20 remaining packages quarantined.', evidence: ['Batch AMX-2603 expiry date 2026-11-01', '20 packages still at m1'], resolution: 'Packages quarantined. Manufacturer notified.' }
+]
+
+export const reports = [
+  { id: 'rpt1', serial: 'DEMO-PCM-2601-00048', type: 'suspicious_origin', reporter: 'anonymous', created: '2026-11-10', status: 'open', description: 'Package purchased from unlicensed vendor, traceability could not be verified on-site.' },
+  { id: 'rpt2', serial: 'DEMO-PCM-2601-00046', type: 'damaged_packaging', reporter: 'anonymous', created: '2026-11-09', status: 'reviewed', description: 'Outer packaging appears tampered with, seal broken on one side.' }
+]

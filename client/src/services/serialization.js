@@ -10,10 +10,12 @@ export function parseSerialIndex(serial, batchNo) {
   return Number.isInteger(num) && num > 0 ? num : null
 }
 
-export function generateBatchSerials({ batch, quantity, packages, date }) {
+export function generateBatchSerials({ batch, quantity, packages, date, manufacturerOrgId }) {
   if (!batch) {
     return { ok: false, error: 'Selected batch was not found.' }
   }
+
+  const ownerOrgId = manufacturerOrgId ?? batch.orgId ?? 'm1'
 
   if (batch.release !== 'Released') {
     return {
@@ -57,9 +59,10 @@ export function generateBatchSerials({ batch, quantity, packages, date }) {
       added.push({
         serial,
         batchId: batch.id,
+        manufacturerOrgId: ownerOrgId,
         status: 'available',
-        custodian: 'm1',
-        history: [['Package serialized', 'm1', date ?? batch.mfd]],
+        custodian: ownerOrgId,
+        history: [['Package serialized', ownerOrgId, date ?? batch.mfd]],
         verifyCount: 0,
         shipmentRef: null
       })
@@ -76,9 +79,10 @@ export function generateBatchSerials({ batch, quantity, packages, date }) {
         added.push({
           serial,
           batchId: batch.id,
+          manufacturerOrgId: ownerOrgId,
           status: 'available',
-          custodian: 'm1',
-          history: [['Package serialized', 'm1', date ?? batch.mfd]],
+          custodian: ownerOrgId,
+          history: [['Package serialized', ownerOrgId, date ?? batch.mfd]],
           verifyCount: 0,
           shipmentRef: null
         })
