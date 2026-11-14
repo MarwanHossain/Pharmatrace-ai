@@ -17,13 +17,14 @@ describe('PharmaTrace AI — Relational Schema & Integrity Validation', () => {
     await closeDatabasePool()
   })
 
-  test('All 21 schema migrations are recorded in schema_migrations', async () => {
+  test('All schema migrations (including 022) are recorded in schema_migrations', async () => {
     const applied = await getAppliedMigrations(pool)
-    assert.equal(applied.length, 21, 'All 21 migrations must be recorded')
+    assert.equal(applied.length, 22, 'All 22 migrations must be recorded')
 
     const versions = applied.map(m => m.version)
     assert.ok(versions.includes('001'))
     assert.ok(versions.includes('021'))
+    assert.ok(versions.includes('022'))
   })
 
   test('Every required table exists in the database', async () => {

@@ -1,7 +1,7 @@
 // PharmaTrace AI — Server Entry Point & Process Lifecycle Manager
 import http from 'http'
 import { app } from './app.js'
-import { env } from './config/env.js'
+import { env, validateAuthConfig } from './config/env.js'
 import { getPool, closeDatabasePool, checkDatabaseHealth } from './config/database.js'
 import { logger } from './utils/logger.js'
 
@@ -9,6 +9,9 @@ let server = null
 let isShuttingDown = false
 
 export async function startServer(port = env.PORT) {
+  // Validate mandatory authentication and security configuration
+  validateAuthConfig()
+
   const httpServer = http.createServer(app)
 
   return new Promise((resolve, reject) => {

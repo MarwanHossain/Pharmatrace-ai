@@ -51,5 +51,21 @@ export const env = Object.freeze({
   DB_CONNECTION_LIMIT: parseNumber(process.env.DB_CONNECTION_LIMIT, 10),
   DB_WAIT_FOR_CONNECTIONS: parseBoolean(process.env.DB_WAIT_FOR_CONNECTIONS, true),
   DB_QUEUE_LIMIT: parseNumber(process.env.DB_QUEUE_LIMIT, 0),
-  DB_CONNECT_TIMEOUT: parseNumber(process.env.DB_CONNECT_TIMEOUT, 10000)
+  DB_CONNECT_TIMEOUT: parseNumber(process.env.DB_CONNECT_TIMEOUT, 10000),
+
+  // Authentication & Session Security (Revision 3.2 §4.2)
+  JWT_SECRET: process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? null : 'pharmatrace-ai-insecure-dev-jwt-secret-min-32-chars!'),
+  JWT_EXPIRES_IN: '15m'
 })
+
+/**
+ * Validates critical security configuration at application startup.
+ * Halts execution if production environment lacks mandatory cryptographic secrets.
+ */
+export function validateAuthConfig() {
+  if (env.NODE_ENV === 'production') {
+    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+      throw new Error('CRITICAL: JWT_SECRET must be configured with at least 32 characters in production mode.')
+    }
+  }
+}

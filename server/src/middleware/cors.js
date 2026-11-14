@@ -11,7 +11,7 @@ export const corsMiddleware = cors({
       return callback(null, true)
     }
 
-    if (env.CORS_ORIGIN.includes(origin) || env.NODE_ENV === 'development') {
+    if (env.CORS_ORIGIN.includes(origin)) {
       return callback(null, true)
     }
 

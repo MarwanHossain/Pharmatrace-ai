@@ -1,5 +1,6 @@
 // PharmaTrace AI — Express Application Configuration
 import express from 'express'
+import cookieParser from 'cookie-parser'
 import { corsMiddleware } from './middleware/cors.js'
 import { requestLogger } from './middleware/requestLogger.js'
 import { notFoundHandler } from './middleware/notFoundHandler.js'
@@ -12,6 +13,7 @@ export function createApp() {
   // Security & Request Parsing Middleware
   app.disable('x-powered-by')
   app.use(corsMiddleware)
+  app.use(cookieParser())
   app.use(express.json({ limit: '10mb' }))
   app.use(express.urlencoded({ extended: true, limit: '10mb' }))
   app.use(requestLogger)
