@@ -339,11 +339,26 @@ describe('Phase 2 Authentication & Authorization Integration Suite', () => {
       [TEST_USER_ACTIVATION, tokenHash]
     )
 
-    const res = await request('GET', `/api/v1/auth/activate/verify?token=${rawToken}`)
+    // Bearer transport verification
+    const res = await request('GET', '/api/v1/auth/activate/verify', {
+      headers: {
+        Authorization: `Bearer ${rawToken}`
+      }
+    })
     assert.equal(res.status, 200)
     assert.equal(res.body.success, true)
     assert.equal(res.body.data.email, 'activation@pharmatrace.test')
     assert.equal(res.body.data.role, 'distributor')
+
+    // Insecure query parameter transport must be rejected
+    const insecureRes = await request('GET', `/api/v1/auth/activate/verify?token=${rawToken}`)
+    assert.equal(insecureRes.status, 400)
+    assert.equal(insecureRes.body.error.code, 'INSECURE_TOKEN_TRANSPORT')
+
+    // Missing Bearer token must be rejected
+    const missingRes = await request('GET', '/api/v1/auth/activate/verify')
+    assert.equal(missingRes.status, 400)
+    assert.equal(missingRes.body.error.code, 'TOKEN_REQUIRED')
 
     // Verify token was NOT consumed
     const [tokenCheck] = await execute('SELECT used FROM activation_tokens WHERE id = "tok-test-001"')

@@ -10,7 +10,8 @@ import {
   signAccessToken,
   getAuthCookieOptions,
   AUTH_COOKIE_NAME,
-  hashToken
+  hashToken,
+  validateTokenFormat
 } from '../utils/tokens.js'
 import { logger } from '../utils/logger.js'
 
@@ -309,12 +310,30 @@ export async function getMe(req, res) {
  * GET /api/v1/auth/activate/verify?token=...
  */
 export async function verifyActivationToken(req, res) {
-  const { token } = req.query
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    'Pragma': 'no-cache',
+    'Referrer-Policy': 'no-referrer'
+  })
 
-  if (!token || typeof token !== 'string') {
+  // Extract token from Authorization: Bearer <token>
+  let token = null
+  const authHeader = req.headers.authorization
+  if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    token = authHeader.slice(7).trim()
+  }
+
+  if (!token) {
     return res.status(400).json({
       success: false,
-      error: { code: 'TOKEN_REQUIRED', message: 'Activation token is required.' }
+      error: { code: 'TOKEN_REQUIRED', message: 'Activation token is required via Authorization Bearer header.' }
+    })
+  }
+
+  if (!validateTokenFormat(token)) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_TOKEN_FORMAT', message: 'Invalid activation token format.' }
     })
   }
 
