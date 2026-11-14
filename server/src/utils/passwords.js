@@ -132,3 +132,53 @@ export async function compareConstantTime(password, actualHash) {
     return false
   }
 }
+
+export const PIN_LENGTH = 6
+
+/**
+ * Validates a 6-digit registration tracking PIN.
+ *
+ * @param {string} pin
+ * @returns {{ valid: boolean, error?: string }}
+ */
+export function validateTrackingPin(pin) {
+  if (typeof pin !== 'string') {
+    return { valid: false, error: 'Tracking PIN must be a string.' }
+  }
+  if (!/^\d{6}$/.test(pin)) {
+    return { valid: false, error: 'Tracking PIN must be exactly 6 digits.' }
+  }
+  return { valid: true }
+}
+
+/**
+ * Hashes a 6-digit tracking PIN using bcrypt with cost factor 12.
+ *
+ * @param {string} pin
+ * @returns {Promise<string>}
+ */
+export async function hashTrackingPin(pin) {
+  const validation = validateTrackingPin(pin)
+  if (!validation.valid) {
+    throw new Error(validation.error)
+  }
+  return bcrypt.hash(pin, BCRYPT_SALT_ROUNDS)
+}
+
+/**
+ * Compares a candidate 6-digit tracking PIN with a stored bcrypt hash.
+ *
+ * @param {string} pin
+ * @param {string} hash
+ * @returns {Promise<boolean>}
+ */
+export async function compareTrackingPin(pin, hash) {
+  if (typeof pin !== 'string' || typeof hash !== 'string' || !hash.startsWith('$2')) {
+    return false
+  }
+  try {
+    return await bcrypt.compare(pin, hash)
+  } catch {
+    return false
+  }
+}

@@ -34,3 +34,18 @@ export const activationRateLimiter = rateLimit({
     }
   }
 })
+
+export const registrationRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour window
+  max: 15, // 15 registration submissions per hour per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: isRateLimitExempt,
+  message: {
+    success: false,
+    error: {
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'Too many registration attempts from this IP address. Please try again after one hour.'
+    }
+  }
+})
