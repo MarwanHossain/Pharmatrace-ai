@@ -1,5 +1,6 @@
 // PharmaTrace AI — Registration Intake & Capacity Engine Integration Tests
 // Phase 3 Milestone 1: Dynamic Capacity Engine & Public Registration Intake
+process.env.NODE_ENV = process.env.NODE_ENV || 'test'
 import { describe, test, before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'fs'

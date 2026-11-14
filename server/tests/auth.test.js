@@ -1,4 +1,5 @@
 // PharmaTrace AI — Complete Phase 2 Authentication & Authorization Integration Test Suite
+process.env.NODE_ENV = process.env.NODE_ENV || 'test'
 import { describe, test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'http'

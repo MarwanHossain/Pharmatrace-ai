@@ -3,6 +3,7 @@
 import { verifyAccessToken, AUTH_COOKIE_NAME } from '../utils/tokens.js'
 import { execute } from '../config/database.js'
 import { logger } from '../utils/logger.js'
+import { sanitizeLogUrl } from './requestLogger.js'
 
 export const CANONICAL_ROLES = Object.freeze([
   'admin',
@@ -159,7 +160,7 @@ export function requireRoles(...allowedRoles) {
         user: req.user.email,
         role: req.user.role,
         requiredRoles: allowedRoles,
-        path: req.originalUrl
+        path: sanitizeLogUrl(req.originalUrl || req.url)
       })
       return res.status(403).json({
         success: false,

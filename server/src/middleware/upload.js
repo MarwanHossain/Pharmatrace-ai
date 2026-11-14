@@ -68,10 +68,23 @@ export const upload = multer({
 
 /**
  * Express middleware wrapping multer upload.any() to handle errors cleanly.
+ * Automatically cleans up any partially written files if an error occurs before the controller executes.
  */
 export function handleDocumentUpload(req, res, next) {
-  upload.any()(req, res, (err) => {
+  upload.any()(req, res, async (err) => {
     if (err) {
+      // Immediately clean up any files written to disk before the error occurred
+      const filesToClean = []
+      if (Array.isArray(req.files)) {
+        filesToClean.push(...req.files)
+      }
+      if (req.file) {
+        filesToClean.push(req.file)
+      }
+      if (filesToClean.length > 0) {
+        await cleanupFiles(filesToClean)
+      }
+
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
           return res.status(413).json({
@@ -79,6 +92,15 @@ export function handleDocumentUpload(req, res, next) {
             error: {
               code: 'FILE_TOO_LARGE',
               message: `Uploaded file exceeds the maximum limit of ${MAX_FILE_SIZE_BYTES / (1024 * 1024)}MB.`
+            }
+          })
+        }
+        if (err.code === 'LIMIT_FILE_COUNT') {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'TOO_MANY_FILES',
+              message: 'Maximum of 10 verification documents allowed per submission.'
             }
           })
         }

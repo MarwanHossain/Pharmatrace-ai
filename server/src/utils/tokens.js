@@ -95,3 +95,47 @@ export function hashToken(rawToken) {
   }
   return crypto.createHash('sha256').update(rawToken).digest('hex')
 }
+
+/**
+ * Validates whether a token matches the 64-character hexadecimal format.
+ *
+ * @param {string} token
+ * @returns {boolean}
+ */
+export function validateTokenFormat(token) {
+  return typeof token === 'string' && /^[0-9a-fA-F]{64}$/.test(token)
+}
+
+/**
+ * Creates a single-use registration access token in the database.
+ * Used for applicant information resubmission workflows.
+ *
+ * @param {import('mysql2/promise').Connection|import('mysql2/promise').Pool} connectionOrPool
+ * @param {string} registrationId
+ * @param {number} [expiresInDays=7]
+ * @returns {Promise<{ id: string, rawToken: string, tokenHash: string, expiresAt: Date }>}
+ */
+export async function createRegistrationAccessToken(connectionOrPool, registrationId, expiresInDays = 7) {
+  const rawToken = generateActivationToken()
+  const tokenHash = hashToken(rawToken)
+  const id = `rat-${crypto.randomUUID()}`
+
+  await connectionOrPool.query(
+    `INSERT INTO registration_access_tokens (
+      id, registration_id, token_hash, expires_at, used, revoked
+    ) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? DAY), 0, 0)`,
+    [id, registrationId, tokenHash, expiresInDays]
+  )
+
+  const [rows] = await connectionOrPool.query(
+    'SELECT expires_at FROM registration_access_tokens WHERE id = ?',
+    [id]
+  )
+
+  return {
+    id,
+    rawToken,
+    tokenHash,
+    expiresAt: rows[0]?.expires_at
+  }
+}

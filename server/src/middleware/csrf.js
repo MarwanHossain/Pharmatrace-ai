@@ -2,6 +2,7 @@
 // Conforms to Revision 3.2 Triple-Lock CSRF Defense Specification
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
+import { sanitizeLogUrl } from './requestLogger.js'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
@@ -49,7 +50,7 @@ export function csrfProtection(req, res, next) {
   if (!requestedWith || requestedWith.toLowerCase() !== 'xmlhttprequest') {
     logger.warn('CSRF rejected: missing or invalid X-Requested-With header', {
       method: req.method,
-      path: req.originalUrl,
+      path: sanitizeLogUrl(req.originalUrl || req.url),
       ip: req.ip
     })
     return res.status(403).json({
@@ -68,7 +69,7 @@ export function csrfProtection(req, res, next) {
   if (!isOriginAllowed(origin, referer)) {
     logger.warn('CSRF rejected: untrusted origin/referer', {
       method: req.method,
-      path: req.originalUrl,
+      path: sanitizeLogUrl(req.originalUrl || req.url),
       origin,
       referer,
       allowed: env.CORS_ORIGIN

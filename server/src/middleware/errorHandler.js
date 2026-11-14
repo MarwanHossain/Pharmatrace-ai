@@ -1,6 +1,7 @@
 // PharmaTrace AI — Centralized Error Handling Middleware
 import { logger } from '../utils/logger.js'
 import { env } from '../config/env.js'
+import { sanitizeLogUrl } from './requestLogger.js'
 
 export function errorHandler(err, req, res, _next) {
   // Capture status code from error or default to 500
@@ -10,12 +11,12 @@ export function errorHandler(err, req, res, _next) {
       ? err.statusCode
       : 500
 
-  // Log error internally with sanitized metadata
+  // Log error internally with sanitized metadata (strictly pathname only, never query strings)
   logger.error('Unhandled application error', {
     message: err.message,
     code: err.code,
     statusCode,
-    url: req.originalUrl || req.url,
+    url: sanitizeLogUrl(req.originalUrl || req.url),
     method: req.method
   })
 
