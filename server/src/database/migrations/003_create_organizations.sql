@@ -1,0 +1,25 @@
+-- Migration 003: Organizations Table
+CREATE TABLE IF NOT EXISTS organizations (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    type VARCHAR(32) NOT NULL,
+    pharmacy_classification ENUM('NOT_APPLICABLE', 'PRIVATE_COMMERCIAL', 'GOVERNMENT') NOT NULL DEFAULT 'NOT_APPLICABLE',
+    dghs_facility_code VARCHAR(64) NULL,
+    government_verification_evidence TEXT NULL,
+    government_verified_by VARCHAR(64) NULL,
+    government_verified_at DATETIME NULL,
+    license_number VARCHAR(128) NOT NULL,
+    tax_id VARCHAR(64) NULL,
+    address TEXT NOT NULL,
+    contact_name VARCHAR(128) NOT NULL,
+    contact_email VARCHAR(128) NOT NULL,
+    contact_phone VARCHAR(32) NOT NULL,
+    status ENUM('active', 'suspended', 'decommissioned') NOT NULL DEFAULT 'active',
+    data_environment ENUM('production', 'demo') NOT NULL DEFAULT 'production',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_org_license (license_number),
+    CONSTRAINT fk_org_category FOREIGN KEY (type) REFERENCES category_policies(category) ON DELETE RESTRICT,
+    INDEX idx_org_type_status_env (type, status, data_environment),
+    INDEX idx_org_pharmacy_class (pharmacy_classification)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

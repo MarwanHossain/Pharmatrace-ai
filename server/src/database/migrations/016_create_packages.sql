@@ -1,0 +1,28 @@
+-- Migration 016: Packages Table
+CREATE TABLE IF NOT EXISTS packages (
+    serial VARCHAR(128) PRIMARY KEY,
+    batch_id VARCHAR(64) NOT NULL,
+    manufacturer_org_id VARCHAR(64) NOT NULL,
+    allocation_type ENUM('COMMERCIAL', 'GOVERNMENT') NOT NULL DEFAULT 'COMMERCIAL',
+    government_allocation_id VARCHAR(64) NULL,
+    custodian_org_id VARCHAR(64) NOT NULL,
+    attempted_recipient_org_id VARCHAR(64) NULL,
+    reported_physical_location TEXT NULL,
+    seizure_status ENUM('NONE', 'PENDING_INSPECTION', 'SEIZED_BY_DGDA', 'RELEASED') NOT NULL DEFAULT 'NONE',
+    seized_by_user_id VARCHAR(64) NULL,
+    seizure_order_ref VARCHAR(128) NULL,
+    seizure_date DATETIME NULL,
+    status ENUM('available', 'in_transit', 'accepted', 'quarantined', 'dispensed', 'rejected', 'missing') NOT NULL DEFAULT 'available',
+    verify_count INT NOT NULL DEFAULT 0,
+    current_shipment_ref VARCHAR(64) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_pkg_batch FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_pkg_mfg FOREIGN KEY (manufacturer_org_id) REFERENCES organizations(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_pkg_alloc FOREIGN KEY (government_allocation_id) REFERENCES government_allocations(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_pkg_custodian FOREIGN KEY (custodian_org_id) REFERENCES organizations(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_pkg_att_rec FOREIGN KEY (attempted_recipient_org_id) REFERENCES organizations(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_pkg_seizer FOREIGN KEY (seized_by_user_id) REFERENCES users(id) ON DELETE RESTRICT,
+    INDEX idx_pkg_custodian_status (custodian_org_id, status),
+    INDEX idx_pkg_alloc_type (allocation_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
