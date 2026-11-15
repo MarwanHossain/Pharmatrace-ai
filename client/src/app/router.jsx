@@ -2,7 +2,9 @@ import { createBrowserRouter, Navigate, Link } from 'react-router-dom'
 import AppShell from '../layouts/AppShell'
 import { ROLES } from '../constants/navigation'
 import Login from '../features/authentication/Login'
-import Register from '../features/authentication/Register'
+import RegistrationLanding from '../features/registration/RegistrationLanding'
+import RegistrationTracking from '../features/registration/RegistrationTracking'
+import RegistrationResubmit from '../features/registration/RegistrationResubmit'
 import ForgotPassword from '../features/authentication/ForgotPassword'
 import Verify from '../features/public-verification/verify/Verify'
 import VerifyResults from '../features/public-verification/results/Results'
@@ -78,7 +80,9 @@ const Msg = ({ t }) => (
 export const router = createBrowserRouter([
   { path: '/', element: <Navigate to="/login" replace /> },
   { path: '/login', element: <Login /> },
-  { path: '/register', element: <Register /> },
+  { path: '/register', element: <RegistrationLanding /> },
+  { path: '/register/track', element: <RegistrationTracking /> },
+  { path: '/resubmit', element: <RegistrationResubmit /> },
   { path: '/forgot-password', element: <ForgotPassword /> },
   { path: '/verify', element: <Verify /> },
   { path: '/verify/results/:serial', element: <VerifyResults /> },

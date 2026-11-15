@@ -182,7 +182,10 @@ export default function Login() {
 
         <div className="mt-4 flex flex-col items-center gap-1.5 border-t border-line pt-4 text-xs text-muted">
           <Link to="/register" className="hover:text-navy hover:underline">
-            Register organization / account (demo)
+            Register organization with DGDA
+          </Link>
+          <Link to="/register/track" className="hover:text-navy hover:underline">
+            Track registration application
           </Link>
           <Link to="/forgot-password" className="hover:text-navy hover:underline">
             Forgot password? (demo)
