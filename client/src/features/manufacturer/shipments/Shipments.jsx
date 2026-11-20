@@ -1,5 +1,8 @@
-import { useMemo, useState } from 'react'
-import { Plus, Send, Truck, ShieldAlert } from 'lucide-react'
+// PharmaTrace AI — Manufacturer Outgoing Shipments Management
+// Connected to live authenticated MariaDB backend APIs (Milestone M7.3)
+
+import { useMemo, useState, useEffect, useCallback } from 'react'
+import { Plus, Send, Truck, ShieldAlert, RefreshCw, AlertCircle } from 'lucide-react'
 import {
   PageHeader,
   MetricCard,
@@ -12,148 +15,99 @@ import {
 } from '../../../components/ui'
 import QrScanner from '../../../components/scanner/QrScanner'
 import OutgoingEligibilityList from '../../../components/shipments/OutgoingEligibilityList'
-import PreDispatchQrCheckpoint from '../../../components/shipments/PreDispatchQrCheckpoint'
-import { useDemoData } from '../../../contexts/DemoData'
-import { useDemoSession } from '../../../contexts/DemoSession'
 import { extractSerialFromInput } from '../../../services/qrPayload'
 import {
-  TRACEABILITY_EVENT_TYPES,
-  hasCurrentPreDispatchVerification
-} from '../../../services/traceabilityEvents'
-import {
-  getCurrentDateIso,
-  validatePackageForDispatch,
-  validateShipmentForDispatch
-} from '../../../services/supplyChain'
+  getOutgoingShipments,
+  getEligiblePackages,
+  getEligibleDestinations,
+  createShipment,
+  getShipment
+} from '../../../services/shipmentApi'
 
 const FILTERS = [
   { id: 'all', label: 'All' },
-  { id: 'pending', label: 'Pending' },
   { id: 'in_transit', label: 'In transit' },
-  { id: 'accepted', label: 'Accepted' }
+  { id: 'accepted', label: 'Accepted' },
+  { id: 'closed', label: 'Closed' }
 ]
 
 export default function Shipments() {
-  const {
-    organizations,
-    batches,
-    packages,
-    shipments,
-    traceabilityEvents,
-    orgName,
-    productOf,
-    createShipment,
-    dispatchShipment,
-    recordTraceabilityEvents
-  } = useDemoData()
-  const { orgId } = useDemoSession()
+  const [shipments, setShipments] = useState([])
+  const [eligiblePackages, setEligiblePackages] = useState([])
+  const [destinations, setDestinations] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState('')
 
   const [statusFilter, setStatusFilter] = useState('all')
   const [selRef, setSelRef] = useState(null)
+  const [selectedDetail, setSelectedDetail] = useState(null)
+  const [loadingDetail, setLoadingDetail] = useState(false)
+
   const [createOpen, setCreateOpen] = useState(false)
-  const [dispatchTargetRef, setDispatchTargetRef] = useState(null)
   const [destination, setDestination] = useState('')
   const [selectedSerials, setSelectedSerials] = useState([])
   const [scanNotice, setScanNotice] = useState(null)
   const [formErr, setFormErr] = useState('')
-  const [dispatchErr, setDispatchErr] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [toast, setToast] = useState('')
 
-  const distributorOptions = useMemo(
-    () => organizations.filter(o => o.type === 'Distributor' && (o.status ?? 'active') === 'active'),
-    [organizations]
-  )
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    setFetchError('')
+    try {
+      const [shipRes, pkgRes, destRes] = await Promise.all([
+        getOutgoingShipments({ limit: 100 }),
+        getEligiblePackages(),
+        getEligibleDestinations()
+      ])
+      setShipments(shipRes.shipments || [])
+      setEligiblePackages(pkgRes || [])
+      setDestinations(destRes || [])
+      if (!destination && destRes && destRes.length > 0) {
+        setDestination(destRes[0].id)
+      }
+    } catch (e) {
+      setFetchError(e.message || 'Failed to load shipments data from server.')
+    } finally {
+      setLoading(false)
+    }
+  }, [destination])
 
-  const mfgShipments = useMemo(
-    () => shipments.filter(s => s.from === orgId),
-    [shipments, orgId]
-  )
+  useEffect(() => {
+    loadData()
+  }, [loadData])
 
   const filteredShipments = useMemo(() => {
-    if (statusFilter === 'all') return mfgShipments
-    return mfgShipments.filter(s => s.status === statusFilter)
-  }, [mfgShipments, statusFilter])
+    if (statusFilter === 'all') return shipments
+    return shipments.filter(s => s.status === statusFilter)
+  }, [shipments, statusFilter])
 
-  const batchById = useMemo(() => {
-    const map = {}
-    for (const b of batches) map[b.id] = b
-    return map
-  }, [batches])
-
-  const { eligibleItems, ineligibleItems, checkBySerial } = useMemo(() => {
-    const today = getCurrentDateIso()
-    const eligible = []
-    const ineligible = []
-    const bySerial = new Map()
-
-    for (const pkg of packages) {
-      if (pkg.custodian !== orgId) continue
-      const batch = batchById[pkg.batchId] ?? null
-      const product = batch ? productOf(batch.productId) : null
-      const check = validatePackageForDispatch({
-        pkg,
-        batch,
-        fromOrgId: orgId,
-        organizations,
-        shipments,
-        today
-      })
-      const entry = { pkg, batch, product, ...check }
-      bySerial.set(pkg.serial, entry)
-      if (check.eligible) eligible.push(entry)
-      else ineligible.push(entry)
-    }
-
-    return { eligibleItems: eligible, ineligibleItems: ineligible, checkBySerial: bySerial }
-  }, [packages, batchById, productOf, shipments, organizations, orgId])
-
-  const selectedShipment = useMemo(
-    () => mfgShipments.find(s => s.ref === selRef) ?? null,
-    [mfgShipments, selRef]
-  )
-
-  const dispatchTarget = useMemo(
-    () => mfgShipments.find(s => s.ref === dispatchTargetRef) ?? null,
-    [mfgShipments, dispatchTargetRef]
-  )
-
-  const dispatchValidation = useMemo(() => {
-    if (!dispatchTarget) return null
-    return validateShipmentForDispatch({
-      shipment: dispatchTarget,
-      packages,
-      batches,
-      organizations,
-      shipments,
-      today: getCurrentDateIso()
-    })
-  }, [dispatchTarget, packages, batches, organizations, shipments])
-
-  const dispatchQrVerified = useMemo(() => {
-    if (!dispatchTarget) return false
-    const serials = dispatchTarget.packageSerials ?? []
-    return (
-      serials.length > 0 &&
-      serials.every(
-        s =>
-          hasCurrentPreDispatchVerification(traceabilityEvents, {
-            serial: s,
-            orgId,
-            role: 'manufacturer'
-          }).verified
-      )
-    )
-  }, [dispatchTarget, traceabilityEvents, orgId])
-
-  const shipmentPackages = useMemo(() => {
-    if (!selectedShipment) return []
-    const serialSet = new Set(selectedShipment.packageSerials ?? [])
-    return packages.filter(p => serialSet.has(p.serial))
-  }, [selectedShipment, packages])
+  const eligibleItems = useMemo(() => {
+    return eligiblePackages.map(pkg => ({
+      pkg: {
+        serial: pkg.serial,
+        status: pkg.status,
+        batchId: pkg.batch_id
+      },
+      batch: {
+        id: pkg.batch_id,
+        no: pkg.batch_no,
+        exp: pkg.exp,
+        release_status: pkg.release_status
+      },
+      product: {
+        name: pkg.brand_name || pkg.generic_name || 'Medicine',
+        strength: pkg.strength || ''
+      },
+      eligible: true,
+      reasons: []
+    }))
+  }, [eligiblePackages])
 
   function openCreateModal() {
-    setDestination(distributorOptions[0]?.id ?? '')
+    if (destinations.length > 0 && !destination) {
+      setDestination(destinations[0].id)
+    }
     setSelectedSerials([])
     setScanNotice(null)
     setFormErr('')
@@ -162,75 +116,37 @@ export default function Shipments() {
 
   function toggleSerial(serial) {
     setFormErr('')
-    const entry = checkBySerial.get(serial)
-    if (!entry?.eligible) {
-      setFormErr(entry ? `${serial}: ${entry.reasons.join(' ')}` : `${serial} is not eligible.`)
-      return
-    }
     setSelectedSerials(prev =>
       prev.includes(serial) ? prev.filter(s => s !== serial) : [...prev, serial]
     )
   }
 
-  async function handleScanPackage(rawSerial) {
-    const normalized = extractSerialFromInput(rawSerial)
+  function handleScanPackage(rawSerial) {
+    const normalized = extractSerialFromInput(rawSerial) || String(rawSerial || '').trim().toUpperCase()
     if (!normalized) return
     setFormErr('')
 
-    const existing = packages.find(p => p.serial === normalized) ?? null
-    const batch = existing ? batchById[existing.batchId] ?? null : null
-    const product = batch ? productOf(batch.productId) : null
-    const entry = checkBySerial.get(normalized)
-
-    const fullCheck = entry
-      ? { eligible: entry.eligible, reasons: entry.reasons }
-      : existing
-        ? validatePackageForDispatch({
-            pkg: existing,
-            batch,
-            fromOrgId: orgId,
-            organizations,
-            shipments,
-            today: getCurrentDateIso()
-          })
-        : { eligible: false, reasons: [`Serial ${normalized} was not found.`] }
-
-    const passed = Boolean(existing && fullCheck.eligible)
-    const failureText = fullCheck.reasons.join(' ')
-
-    await recordTraceabilityEvents([
-      {
-        eventType: passed
-          ? TRACEABILITY_EVENT_TYPES.MANUFACTURER_QR_VERIFIED
-          : TRACEABILITY_EVENT_TYPES.MANUFACTURER_QR_VERIFICATION_FAILED,
-        serial: normalized,
-        packageId: normalized,
-        batchId: existing?.batchId ?? null,
-        checkpoint: 'manufacturer_pre_dispatch',
-        category: 'observation',
-        outcome: passed ? 'success' : existing ? 'blocked' : 'failed',
-        failureReason: passed ? null : failureText
-      }
-    ])
-
-    if (passed) {
-      const desc = `${product ? `${product.name} ${product.strength}` : 'Package'}${batch ? ` · ${batch.no}` : ''}`
-      if (selectedSerials.includes(normalized)) {
-        setScanNotice({ ok: true, text: `QR verified: ${normalized} (${desc}) is already selected.` })
-      } else {
-        setSelectedSerials(prev => [...prev, normalized])
-        setScanNotice({
-          ok: true,
-          text: `QR verified & added ${normalized} (${desc} · ${orgName(orgId)}).`
-        })
-      }
+    const found = eligiblePackages.find(p => p.serial === normalized)
+    if (!found) {
+      setScanNotice({
+        ok: false,
+        text: `Serial ${normalized} is not among eligible QA-released packages in custody.`
+      })
       return
     }
 
-    setScanNotice({
-      ok: false,
-      text: existing ? `Blocked ${normalized}: ${failureText}` : failureText
-    })
+    if (selectedSerials.includes(normalized)) {
+      setScanNotice({
+        ok: true,
+        text: `Package ${normalized} is already selected.`
+      })
+    } else {
+      setSelectedSerials(prev => [...prev, normalized])
+      setScanNotice({
+        ok: true,
+        text: `Verified & added ${normalized} (${found.brand_name || found.generic_name || 'Package'}).`
+      })
+    }
   }
 
   async function handleCreateShipment() {
@@ -248,65 +164,68 @@ export default function Shipments() {
     setFormErr('')
     try {
       const res = await createShipment({
-        from: orgId,
-        to: destination,
-        packageSerials: selectedSerials
+        toOrgId: destination,
+        packageSerials: selectedSerials,
+        allocationScope: 'COMMERCIAL'
       })
-      if (!res?.ok) {
-        setFormErr(res?.error || 'Could not create shipment.')
-        return
-      }
       setCreateOpen(false)
-      setToast(`Shipment ${res.shipment.ref} created with ${selectedSerials.length} package(s).`)
+      setSelectedSerials([])
+      setToast(`Shipment ${res.ref} dispatched with ${res.packageCount} package(s).`)
+      await loadData()
+    } catch (err) {
+      setFormErr(err.message || 'Could not dispatch shipment.')
     } finally {
       setSubmitting(false)
     }
   }
 
-  function openDispatchConfirm(shipment, e) {
-    e?.stopPropagation()
-    setDispatchErr('')
-    setDispatchTargetRef(shipment.ref)
-  }
-
-  async function confirmDispatch() {
-    if (!dispatchTarget || submitting) return
-    setSubmitting(true)
-    setDispatchErr('')
+  async function handleRowClick(row) {
+    setSelRef(row.ref)
+    setLoadingDetail(true)
+    setSelectedDetail(null)
     try {
-      const res = await dispatchShipment(dispatchTarget.ref, { requireQrVerification: true })
-      if (!res?.ok) {
-        setDispatchErr(res?.error || 'Could not dispatch shipment.')
-        return
-      }
-      setToast(`Shipment ${dispatchTarget.ref} dispatched to ${orgName(dispatchTarget.to)}.`)
-      setDispatchTargetRef(null)
+      const detail = await getShipment(row.ref)
+      setSelectedDetail(detail)
+    } catch (err) {
+      setToast(`Failed to load details for ${row.ref}: ${err.message}`)
     } finally {
-      setSubmitting(false)
+      setLoadingDetail(false)
     }
   }
 
-  const pendingCount = mfgShipments.filter(s => s.status === 'pending').length
-  const inTransitCount = mfgShipments.filter(s => s.status === 'in_transit').length
-  const acceptedCount = mfgShipments.filter(s => s.status === 'accepted').length
+  const inTransitCount = shipments.filter(s => s.status === 'in_transit').length
+  const acceptedCount = shipments.filter(s => s.status === 'accepted' || s.status === 'closed').length
 
   return (
     <>
       <PageHeader
         title="Outgoing Shipments"
-        description="Prepare, scan, and dispatch serialized pharmaceutical shipments to distributors."
+        description="Prepare, scan, and dispatch serialized pharmaceutical shipments to authorized distributors."
         actions={
-          <Button onClick={openCreateModal}>
-            <Plus size={15} /> Create shipment
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={loadData} disabled={loading}>
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+              Refresh
+            </Button>
+            <Button onClick={openCreateModal}>
+              <Plus size={15} /> Create shipment
+            </Button>
+          </div>
         }
       />
 
+      {fetchError && (
+        <div role="alert" className="mb-4 flex items-center gap-2 rounded-md border border-quarantine-line bg-quarantine-soft p-3 text-sm text-quarantine">
+          <AlertCircle size={16} />
+          <span>{fetchError}</span>
+        </div>
+      )}
+
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <MetricCard label="Total shipments" value={mfgShipments.length} />
-        <MetricCard label="Pending dispatch" value={pendingCount} />
+        <MetricCard label="Total shipments" value={shipments.length} />
         <MetricCard label="In transit" value={inTransitCount} />
-        <MetricCard label="Accepted" value={acceptedCount} hint={`${eligibleItems.length} packages eligible to ship`} />
+        <MetricCard label="Accepted / Closed" value={acceptedCount} />
+        <MetricCard label="Eligible packages" value={eligiblePackages.length} hint="Available in custody to dispatch" />
       </div>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -314,8 +233,8 @@ export default function Shipments() {
           {FILTERS.map(f => {
             const count =
               f.id === 'all'
-                ? mfgShipments.length
-                : mfgShipments.filter(s => s.status === f.id).length
+                ? shipments.length
+                : shipments.filter(s => s.status === f.id).length
             return (
               <button
                 key={f.id}
@@ -336,7 +255,7 @@ export default function Shipments() {
 
       <DataTable
         rows={filteredShipments}
-        onRowClick={r => setSelRef(r.ref)}
+        onRowClick={handleRowClick}
         empty="No outgoing shipments match the selected status."
         columns={[
           {
@@ -344,38 +263,37 @@ export default function Shipments() {
             label: 'Reference',
             render: r => <span className="id-text whitespace-nowrap font-semibold text-navy">{r.ref}</span>
           },
-          { key: 'to', label: 'Destination', render: r => orgName(r.to) },
-          { key: 'count', label: 'Packages', render: r => <span className="id-text">{r.count}</span> },
-          { key: 'created', label: 'Created', render: r => <span className="id-text whitespace-nowrap">{r.created}</span> },
+          { key: 'to_org_name', label: 'Destination', render: r => r.to_org_name || r.to_org_id },
+          { key: 'package_count', label: 'Packages', render: r => <span className="id-text">{r.package_count || r.count || 0}</span> },
           {
-            key: 'dispatched',
+            key: 'dispatched_at',
             label: 'Dispatched',
-            render: r => <span className="id-text whitespace-nowrap">{r.dispatched ?? '—'}</span>
+            render: r => <span className="id-text whitespace-nowrap">{r.dispatched_at ? new Date(r.dispatched_at).toLocaleDateString() : '—'}</span>
           },
           { key: 'status', label: 'Status', render: r => <StatusBadge status={r.status} /> },
-          { key: 'receiving', label: 'Receiving' },
           {
-            key: 'actions',
-            label: 'Actions',
-            render: r =>
-              r.status === 'pending' ? (
-                <Button
-                  variant="success"
-                  className="px-2.5 py-1 text-xs"
-                  onClick={e => openDispatchConfirm(r, e)}
-                >
-                  <Send size={13} /> Dispatch
-                </Button>
-              ) : (
-                <span className="text-xs text-muted">—</span>
-              )
+            key: 'receiving',
+            label: 'Receiving Summary',
+            render: r => {
+              if (r.status === 'in_transit') return <span className="text-xs text-muted">Awaiting recipient</span>
+              if (r.status === 'accepted') return <span className="text-xs text-clinical font-semibold">Accepted ({r.accepted_count ?? r.package_count})</span>
+              if (r.status === 'reconciliation_required' || r.status === 'partially_received') {
+                return (
+                  <span className="text-xs text-quarantine font-medium">
+                    {r.accepted_count || 0} acc, {r.damaged_count || 0} dmg, {r.missing_count || 0} mis
+                  </span>
+                )
+              }
+              return <span className="text-xs text-muted">{r.status}</span>
+            }
           }
         ]}
       />
 
+      {/* Create Shipment Modal */}
       <Modal
         open={createOpen}
-        title="Create outgoing shipment"
+        title="Create & dispatch shipment"
         onClose={() => setCreateOpen(false)}
         actions={
           <>
@@ -385,19 +303,19 @@ export default function Shipments() {
             <Button
               type="button"
               onClick={handleCreateShipment}
-              disabled={!destination || selectedSerials.length === 0 || eligibleItems.length === 0 || submitting}
+              disabled={!destination || selectedSerials.length === 0 || eligiblePackages.length === 0 || submitting}
             >
-              {submitting ? 'Creating...' : `Create shipment (${selectedSerials.length})`}
+              {submitting ? 'Dispatching...' : `Dispatch shipment (${selectedSerials.length})`}
             </Button>
           </>
         }
       >
         <div className="space-y-4">
           <label className="block text-sm font-semibold">
-            Destination
-            {distributorOptions.length === 0 ? (
+            Destination Distributor
+            {destinations.length === 0 ? (
               <p role="alert" className="mt-1 rounded-md border border-quarantine-line bg-quarantine-soft p-2.5 text-xs font-medium text-quarantine">
-                No active distributor organizations are available. Reactivate or add an active distributor first.
+                No active distributor organizations are available in the registry.
               </p>
             ) : (
               <select
@@ -405,7 +323,7 @@ export default function Shipments() {
                 onChange={e => setDestination(e.target.value)}
                 className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
               >
-                {distributorOptions.map(org => (
+                {destinations.map(org => (
                   <option key={org.id} value={org.id}>
                     {org.name}
                   </option>
@@ -420,7 +338,7 @@ export default function Shipments() {
             </div>
             <QrScanner
               onScan={handleScanPackage}
-              placeholder="Scan or enter package serial (e.g. DEMO-PCM-2601-00023)"
+              placeholder="Scan or enter package serial (e.g. SN-BP-00001)"
               label="Scan package serial into shipment"
             />
             {scanNotice && (
@@ -437,173 +355,93 @@ export default function Shipments() {
 
           <OutgoingEligibilityList
             eligibleItems={eligibleItems}
-            ineligibleItems={ineligibleItems}
+            ineligibleItems={[]}
             selectedSerials={selectedSerials}
             onToggle={toggleSerial}
             onSelectAllEligible={() => setSelectedSerials(eligibleItems.map(i => i.pkg.serial))}
             onClearSelected={() => setSelectedSerials([])}
-            emptyEligibleText="No eligible manufacturer packages are available. Generate serials for a released, unexpired batch first."
+            emptyEligibleText="No eligible manufacturer packages in custody. Ensure batches are QA-released and packages serialized."
           />
 
           {formErr && (
-            <p role="alert" className="text-sm text-quarantine">
+            <p role="alert" className="text-sm font-semibold text-quarantine">
               {formErr}
             </p>
           )}
         </div>
       </Modal>
 
-      <Modal
-        open={!!dispatchTarget}
-        title={dispatchTarget ? `Dispatch ${dispatchTarget.ref}?` : 'Dispatch shipment'}
-        onClose={() => setDispatchTargetRef(null)}
-        actions={
-          <>
-            <Button variant="secondary" type="button" onClick={() => setDispatchTargetRef(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="success"
-              type="button"
-              disabled={!dispatchValidation?.eligible || !dispatchQrVerified || submitting}
-              onClick={confirmDispatch}
-            >
-              <Truck size={15} /> {submitting ? 'Dispatching...' : 'Confirm dispatch'}
-            </Button>
-          </>
-        }
+      {/* Shipment Details Drawer */}
+      <Drawer
+        open={!!selRef}
+        onClose={() => {
+          setSelRef(null)
+          setSelectedDetail(null)
+        }}
+        title={selRef ? `Shipment ${selRef}` : 'Shipment details'}
       >
-        {dispatchTarget && (
-          <div className="space-y-3 text-sm">
-            <p className="text-muted">
-              Dispatching this shipment will transition it to{' '}
-              <strong className="text-ink">In transit</strong> and update custody history for all{' '}
-              <strong className="text-ink">{dispatchTarget.count}</strong> package(s).
-            </p>
-            <dl className="space-y-1.5 rounded-md border border-line bg-surface p-3 text-xs">
-              <div className="flex justify-between">
-                <dt className="text-muted">Reference</dt>
-                <dd className="id-text font-semibold text-navy">{dispatchTarget.ref}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-muted">Destination</dt>
-                <dd className="font-semibold">{orgName(dispatchTarget.to)}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-muted">Packages</dt>
-                <dd className="id-text font-semibold">{dispatchTarget.count}</dd>
-              </div>
-            </dl>
-
-            <PreDispatchQrCheckpoint
-              shipment={dispatchTarget}
-              role="manufacturer"
-              orgId={orgId}
-              packages={packages}
-              batches={batches}
-              organizations={organizations}
-              shipments={shipments}
-              traceabilityEvents={traceabilityEvents}
-              productOf={productOf}
-              onRecordEvents={recordTraceabilityEvents}
-            />
-
-            {dispatchValidation && !dispatchValidation.eligible && (
-              <div role="alert" className="rounded-md border border-quarantine-line bg-quarantine-soft p-3 text-xs text-quarantine">
-                <div className="mb-1 flex items-center gap-1.5 font-bold">
-                  <ShieldAlert size={14} aria-hidden="true" /> Dispatch blocked by eligibility rules
-                </div>
-                <ul className="list-disc space-y-1 pl-4">
-                  {dispatchValidation.errors.map((err, i) => (
-                    <li key={i}>{err}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {dispatchErr && (
-              <p role="alert" className="text-xs font-semibold text-quarantine">
-                {dispatchErr}
-              </p>
-            )}
+        {loadingDetail && (
+          <div className="py-8 text-center text-sm text-muted">
+            <RefreshCw size={18} className="mx-auto mb-2 animate-spin text-navy" />
+            Loading manifest details...
           </div>
         )}
-      </Modal>
 
-      <Drawer
-        open={!!selectedShipment}
-        onClose={() => setSelRef(null)}
-        title={selectedShipment ? `Shipment ${selectedShipment.ref}` : 'Shipment details'}
-      >
-        {selectedShipment && (
+        {selectedDetail && (
           <>
             <dl className="mb-5 space-y-2 text-sm">
               <div className="flex justify-between">
                 <dt className="text-muted">Reference</dt>
-                <dd className="id-text font-semibold">{selectedShipment.ref}</dd>
+                <dd className="id-text font-semibold">{selectedDetail.ref}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted">Origin</dt>
-                <dd className="font-semibold">{orgName(selectedShipment.from)}</dd>
+                <dd className="font-semibold">{selectedDetail.from_org_name || selectedDetail.from_org_id}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted">Destination</dt>
-                <dd className="font-semibold">{orgName(selectedShipment.to)}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-muted">Created</dt>
-                <dd className="id-text font-semibold">{selectedShipment.created}</dd>
+                <dd className="font-semibold">{selectedDetail.to_org_name || selectedDetail.to_org_id}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted">Dispatched</dt>
-                <dd className="id-text font-semibold">{selectedShipment.dispatched ?? '—'}</dd>
+                <dd className="id-text font-semibold">
+                  {selectedDetail.dispatched_at ? new Date(selectedDetail.dispatched_at).toLocaleString() : '—'}
+                </dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-muted">Receiving</dt>
-                <dd className="font-semibold">{selectedShipment.receiving}</dd>
+                <dt className="text-muted">Received</dt>
+                <dd className="id-text font-semibold">
+                  {selectedDetail.received_at ? new Date(selectedDetail.received_at).toLocaleString() : '—'}
+                </dd>
               </div>
               <div className="flex items-center justify-between">
                 <dt className="text-muted">Status</dt>
-                <StatusBadge status={selectedShipment.status} />
+                <StatusBadge status={selectedDetail.status} />
               </div>
             </dl>
 
-            {selectedShipment.status === 'pending' && (
-              <div className="mb-6">
-                <Button
-                  variant="success"
-                  className="w-full"
-                  onClick={() => openDispatchConfirm(selectedShipment)}
-                >
-                  <Send size={15} /> Dispatch shipment
-                </Button>
-              </div>
-            )}
-
             <h3 className="mb-2 text-sm font-bold text-navy">
-              Packages ({selectedShipment.packageSerials?.length ?? 0})
+              Manifest Packages ({selectedDetail.packages?.length ?? selectedDetail.package_count ?? 0})
             </h3>
-            {shipmentPackages.length === 0 ? (
+            {(!selectedDetail.packages || selectedDetail.packages.length === 0) ? (
               <p className="rounded-md border border-dashed border-line p-4 text-center text-xs text-muted">
-                No packages attached to this shipment.
+                No packages attached to this shipment manifest.
               </p>
             ) : (
               <div className="max-h-80 divide-y divide-line overflow-y-auto rounded-md border border-line">
-                {shipmentPackages.map(pkg => {
-                  const batch = batchById[pkg.batchId]
-                  const prod = batch ? productOf(batch.productId) : null
-                  return (
-                    <div key={pkg.serial} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
-                      <div>
-                        <div className="id-text font-semibold text-navy">{pkg.serial}</div>
-                        <div className="text-muted">
-                          {prod ? `${prod.name} ${prod.strength}` : '—'} · {batch?.no ?? '—'}
-                        </div>
+                {selectedDetail.packages.map(pkg => (
+                  <div key={pkg.serial} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                    <div>
+                      <div className="id-text font-semibold text-navy">{pkg.serial}</div>
+                      <div className="text-muted">
+                        {pkg.brand_name || pkg.generic_name || 'Medicine'} · Batch {pkg.batch_no || '—'} · Exp {pkg.exp || '—'}
                       </div>
-                      <StatusBadge status={pkg.status} />
                     </div>
-                  )
-                })}
+                    <div className="flex items-center gap-1.5">
+                      <StatusBadge status={pkg.disposition_status || pkg.status} />
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </>

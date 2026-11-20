@@ -7,11 +7,12 @@ import {
   logoutAll,
   getMe,
   verifyActivationToken,
-  activateAccount
+  activateAccount,
+  changePassword
 } from '../controllers/auth.controller.js'
 import { authenticateToken } from '../middleware/auth.js'
 import { csrfProtection } from '../middleware/csrf.js'
-import { loginRateLimiter, activationRateLimiter } from '../middleware/rateLimiter.js'
+import { loginRateLimiter, activationRateLimiter, changePasswordRateLimiter } from '../middleware/rateLimiter.js'
 import { rejectInsecureTokenQuery } from '../middleware/tokenTransport.js'
 
 const router = Router()
@@ -27,5 +28,6 @@ router.post('/logout', csrfProtection, logout)
 // Authenticated Session Endpoints
 router.get('/me', authenticateToken, getMe)
 router.post('/logout-all', authenticateToken, csrfProtection, logoutAll)
+router.post('/change-password', authenticateToken, changePasswordRateLimiter, csrfProtection, changePassword)
 
 export default router

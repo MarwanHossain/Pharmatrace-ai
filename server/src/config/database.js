@@ -7,24 +7,51 @@ import { logger } from '../utils/logger.js'
 let pool = null
 
 export function getPoolConfig(overrides = {}) {
+  const user = (overrides.user !== undefined ? overrides.user : env.DB_USER || '').trim()
+
+  // Prohibit root fallback or missing runtime account
+  if (!user || user.toLowerCase() === 'root') {
+    throw new Error(
+      'DATABASE_CONFIGURATION_ERROR: Direct connection as "root" is strictly prohibited. ' +
+      'PharmaTrace AI requires a dedicated least-privilege runtime account (DB_USER=pharmatrace_app).'
+    )
+  }
+
+  // Ensure password is provided
+  const password = overrides.password !== undefined ? overrides.password : env.DB_PASSWORD
+  if (password === undefined || password === null) {
+    throw new Error(
+      'DATABASE_CONFIGURATION_ERROR: Missing database password for runtime user. ' +
+      'Please configure DB_PASSWORD in server/.env.'
+    )
+  }
+
   const config = {
-    host: env.DB_HOST,
-    port: env.DB_PORT,
-    user: env.DB_USER,
-    password: env.DB_PASSWORD,
-    charset: env.DB_CHARSET,
-    waitForConnections: env.DB_WAIT_FOR_CONNECTIONS,
-    connectionLimit: env.DB_CONNECTION_LIMIT,
-    queueLimit: env.DB_QUEUE_LIMIT,
-    connectTimeout: env.DB_CONNECT_TIMEOUT,
+    host: overrides.host || env.DB_HOST,
+    port: overrides.port || env.DB_PORT,
+    user,
+    password,
+    charset: overrides.charset || env.DB_CHARSET,
+    waitForConnections: overrides.waitForConnections !== undefined ? overrides.waitForConnections : env.DB_WAIT_FOR_CONNECTIONS,
+    connectionLimit: overrides.connectionLimit || env.DB_CONNECTION_LIMIT,
+    queueLimit: overrides.queueLimit !== undefined ? overrides.queueLimit : env.DB_QUEUE_LIMIT,
+    connectTimeout: overrides.connectTimeout || env.DB_CONNECT_TIMEOUT,
     // Enable MariaDB-compatible date and timezone handling
     dateStrings: true,
     ...overrides
   }
 
   // Only bind database if explicitly non-empty, allowing generic server ping if DB not yet created
-  if (env.DB_NAME && env.DB_NAME.trim() !== '') {
-    config.database = env.DB_NAME.trim()
+  const dbName = overrides.database !== undefined ? overrides.database : env.DB_NAME
+  if (dbName && String(dbName).trim() !== '') {
+    config.database = String(dbName).trim()
+  }
+
+  // Safety check: ensure runtime pool never connects to non-test database during tests
+  if (config.database && env.NODE_ENV === 'test' && config.database !== 'pharmatrace_ai_test') {
+    throw new Error(
+      `DATABASE_SAFETY_ERROR: In test environment, runtime database must strictly be 'pharmatrace_ai_test', got '${config.database}'`
+    )
   }
 
   return config

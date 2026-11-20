@@ -8,6 +8,7 @@ import fs from 'fs'
 import crypto from 'crypto'
 import app from '../src/app.js'
 import { getPool, execute, closeDatabasePool } from '../src/config/database.js'
+import { createMigrationConnection } from '../src/database/migrator.js'
 import { submitRegistration } from '../src/services/registration.service.js'
 import { signAccessToken, hashToken } from '../src/utils/tokens.js'
 import { UPLOAD_DIR } from '../src/middleware/upload.js'
@@ -145,54 +146,68 @@ async function createSampleRegistration(overrides = {}) {
 /**
  * Cleans up all test fixtures created by this suite
  */
+async function executePrivileged(sql, params = []) {
+  const migConn = await createMigrationConnection()
+  try {
+    return await migConn.query(sql, params)
+  } finally {
+    await migConn.end()
+  }
+}
+
 async function cleanupFixtures() {
   clearCapturedNotifications()
 
-  // 1. Delete audit logs associated with the admin test fixture
-  await pool.query('DELETE FROM registration_audit_log WHERE actor_user_id = ?', [ADMIN_USER_ID])
+  const migConn = await createMigrationConnection()
+  try {
+    // 1. Delete audit logs associated with the admin test fixture
+    await migConn.query('DELETE FROM registration_audit_log WHERE actor_user_id = ?', [ADMIN_USER_ID])
 
-  // 2. Fetch test registration IDs
-  const [testRegs] = await pool.query(
-    'SELECT id, approved_org_id, contact_email FROM organization_registrations WHERE license_number LIKE ? OR contact_email LIKE ?',
-    [`%${TEST_PREFIX}%`, '%m3test.com%']
-  )
-
-  const regIds = testRegs.map(r => r.id)
-  const approvedOrgIds = testRegs.map(r => r.approved_org_id).filter(Boolean)
-  const contactEmails = testRegs.map(r => r.contact_email).filter(Boolean)
-
-  if (regIds.length > 0) {
-    const placeholders = regIds.map(() => '?').join(',')
-    await pool.query(`DELETE FROM registration_access_tokens WHERE registration_id IN (${placeholders})`, regIds)
-    await pool.query(`DELETE FROM registration_audit_log WHERE registration_id IN (${placeholders})`, regIds)
-    await pool.query(`DELETE FROM registration_documents WHERE registration_id IN (${placeholders})`, regIds)
-    await pool.query(`DELETE FROM registration_submissions WHERE registration_id IN (${placeholders})`, regIds)
-    await pool.query(`DELETE FROM organization_registrations WHERE id IN (${placeholders})`, regIds)
-  }
-
-  // 3. Clean up provisioned test users and activation tokens
-  if (contactEmails.length > 0) {
-    const emailPlaceholders = contactEmails.map(() => '?').join(',')
-    const [provisionedUsers] = await pool.query(
-      `SELECT id FROM users WHERE email IN (${emailPlaceholders})`,
-      contactEmails
+    // 2. Fetch test registration IDs
+    const [testRegs] = await migConn.query(
+      'SELECT id, approved_org_id, contact_email FROM organization_registrations WHERE license_number LIKE ? OR contact_email LIKE ?',
+      [`%${TEST_PREFIX}%`, '%m3test.com%']
     )
-    const userIds = provisionedUsers.map(u => u.id)
-    if (userIds.length > 0) {
-      const uPlaceholders = userIds.map(() => '?').join(',')
-      await pool.query(`DELETE FROM activation_tokens WHERE user_id IN (${uPlaceholders})`, userIds)
-      await pool.query(`DELETE FROM users WHERE id IN (${uPlaceholders})`, userIds)
+
+    const regIds = testRegs.map(r => r.id)
+    const approvedOrgIds = testRegs.map(r => r.approved_org_id).filter(Boolean)
+    const contactEmails = testRegs.map(r => r.contact_email).filter(Boolean)
+
+    if (regIds.length > 0) {
+      const placeholders = regIds.map(() => '?').join(',')
+      await migConn.query(`DELETE FROM registration_access_tokens WHERE registration_id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM registration_audit_log WHERE registration_id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM registration_documents WHERE registration_id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM registration_submissions WHERE registration_id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM organization_registrations WHERE id IN (${placeholders})`, regIds)
     }
-  }
 
-  // 4. Clean up provisioned test organizations
-  if (approvedOrgIds.length > 0) {
-    const orgPlaceholders = approvedOrgIds.map(() => '?').join(',')
-    await pool.query(`DELETE FROM organizations WHERE id IN (${orgPlaceholders})`, approvedOrgIds)
-  }
+    // 3. Clean up provisioned test users and activation tokens
+    if (contactEmails.length > 0) {
+      const emailPlaceholders = contactEmails.map(() => '?').join(',')
+      const [provisionedUsers] = await migConn.query(
+        `SELECT id FROM users WHERE email IN (${emailPlaceholders})`,
+        contactEmails
+      )
+      const userIds = provisionedUsers.map(u => u.id)
+      if (userIds.length > 0) {
+        const uPlaceholders = userIds.map(() => '?').join(',')
+        await migConn.query(`DELETE FROM activation_tokens WHERE user_id IN (${uPlaceholders})`, userIds)
+        await migConn.query(`DELETE FROM users WHERE id IN (${uPlaceholders})`, userIds)
+      }
+    }
 
-  // Also clean up any organizations created with test license prefix
-  await pool.query('DELETE FROM organizations WHERE license_number LIKE ?', [`%${TEST_PREFIX}%`])
+    // 4. Clean up provisioned test organizations
+    if (approvedOrgIds.length > 0) {
+      const orgPlaceholders = approvedOrgIds.map(() => '?').join(',')
+      await migConn.query(`DELETE FROM organizations WHERE id IN (${orgPlaceholders})`, approvedOrgIds)
+    }
+
+    // Also clean up any organizations created with test license prefix
+    await migConn.query('DELETE FROM organizations WHERE license_number LIKE ?', [`%${TEST_PREFIX}%`])
+  } finally {
+    await migConn.end()
+  }
 }
 
 describe('Phase 3 Milestone 3 — Administrator Review & Atomic Organization Provisioning Suite', () => {
@@ -237,7 +252,7 @@ describe('Phase 3 Milestone 3 — Administrator Review & Atomic Organization Pro
     try {
       await cleanupFixtures()
       // Clean up test users
-      await pool.query(
+      await executePrivileged(
         `DELETE FROM users WHERE id IN (?, ?, ?, ?, ?, ?)`,
         [
           ADMIN_USER_ID,
@@ -722,7 +737,7 @@ describe('Phase 3 Milestone 3 — Administrator Review & Atomic Organization Pro
     })
 
     test('approving Wholesaler application provisions successfully when capacity is open', async () => {
-      await pool.query('DELETE FROM organizations WHERE type = "wholesaler" AND status = "active"')
+      await cleanupFixtures()
       const sample = await createSampleRegistration({ category: 'wholesaler' })
       await request('POST', `/api/v1/admin/registrations/${sample.registrationId}/review`, { headers: { Cookie: adminCookie } })
 
@@ -871,8 +886,8 @@ describe('Phase 3 Milestone 3 — Administrator Review & Atomic Organization Pro
   // =========================================================================
   describe('Group G: Capacity Concurrency Stress Tests', () => {
     test('two admins approving competing Distributor applications serialize safely with capacity=1', async () => {
-      // Ensure no active production distributor exists initially
-      await pool.query('DELETE FROM organizations WHERE type = "distributor" AND status = "active"')
+      // Ensure test-created distributor records from prior tests are cleaned
+      await cleanupFixtures()
 
       const distReg1 = await createSampleRegistration({ category: 'distributor' })
       const distReg2 = await createSampleRegistration({ category: 'distributor' })
@@ -918,8 +933,8 @@ describe('Phase 3 Milestone 3 — Administrator Review & Atomic Organization Pro
     })
 
     test('two admins approving competing Wholesaler applications serialize safely with capacity=1', async () => {
-      // Ensure no active wholesaler exists initially
-      await pool.query('DELETE FROM organizations WHERE type = "wholesaler" AND status = "active"')
+      // Ensure test-created wholesaler records from prior tests are cleaned
+      await cleanupFixtures()
 
       const wholReg1 = await createSampleRegistration({ category: 'wholesaler' })
       const wholReg2 = await createSampleRegistration({ category: 'wholesaler' })

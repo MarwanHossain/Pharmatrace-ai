@@ -8,6 +8,7 @@ import path from 'path'
 import http from 'http'
 import { app } from '../src/app.js'
 import { getPool, closeDatabasePool } from '../src/config/database.js'
+import { createMigrationConnection } from '../src/database/migrator.js'
 import { compareTrackingPin } from '../src/utils/reference.js'
 import { UPLOAD_DIR } from '../src/middleware/upload.js'
 
@@ -64,44 +65,49 @@ function attachFile(form, fieldName = 'license', fileName = 'test_license.pdf', 
  * Cleanup helper for test database rows and files
  */
 async function cleanupTestData() {
-  const [testRegs] = await pool.query(
-    "SELECT id FROM organization_registrations WHERE org_name LIKE 'Test %'"
-  )
-
-  if (testRegs.length > 0) {
-    const regIds = testRegs.map(r => r.id)
-    const placeholders = regIds.map(() => '?').join(',')
-
-    // Get stored filenames to delete from disk
-    const [docs] = await pool.query(
-      `SELECT stored_filename FROM registration_documents WHERE registration_id IN (${placeholders})`,
-      regIds
+  const migConn = await createMigrationConnection()
+  try {
+    const [testRegs] = await migConn.query(
+      "SELECT id FROM organization_registrations WHERE org_name LIKE 'Test %'"
     )
 
-    for (const doc of docs) {
-      const filePath = path.join(UPLOAD_DIR, doc.stored_filename)
-      if (fs.existsSync(filePath)) {
-        try {
-          fs.unlinkSync(filePath)
-        } catch {
-          // ignore
+    if (testRegs.length > 0) {
+      const regIds = testRegs.map(r => r.id)
+      const placeholders = regIds.map(() => '?').join(',')
+
+      // Get stored filenames to delete from disk
+      const [docs] = await migConn.query(
+        `SELECT stored_filename FROM registration_documents WHERE registration_id IN (${placeholders})`,
+        regIds
+      )
+
+      for (const doc of docs) {
+        const filePath = path.join(UPLOAD_DIR, doc.stored_filename)
+        if (fs.existsSync(filePath)) {
+          try {
+            fs.unlinkSync(filePath)
+          } catch {
+            // ignore
+          }
         }
       }
+
+      await migConn.query(`DELETE FROM registration_audit_log WHERE registration_id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM registration_documents WHERE registration_id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM registration_submissions WHERE registration_id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM organization_registrations WHERE id IN (${placeholders})`, regIds)
     }
 
-    await pool.query(`DELETE FROM registration_audit_log WHERE registration_id IN (${placeholders})`, regIds)
-    await pool.query(`DELETE FROM registration_documents WHERE registration_id IN (${placeholders})`, regIds)
-    await pool.query(`DELETE FROM registration_submissions WHERE registration_id IN (${placeholders})`, regIds)
-    await pool.query(`DELETE FROM organization_registrations WHERE id IN (${placeholders})`, regIds)
+    // Remove test organizations
+    await migConn.query("DELETE FROM organizations WHERE id LIKE 'test-dist-org-%'")
+
+    // Restore category policies to default
+    await migConn.query(
+      "UPDATE category_policies SET is_registration_allowed = 1 WHERE category IN ('manufacturer', 'distributor', 'wholesaler', 'pharmacy')"
+    )
+  } finally {
+    await migConn.end()
   }
-
-  // Remove test organizations
-  await pool.query("DELETE FROM organizations WHERE id LIKE 'test-dist-org-%'")
-
-  // Restore category policies to default
-  await pool.query(
-    "UPDATE category_policies SET is_registration_allowed = 1 WHERE category IN ('manufacturer', 'distributor', 'wholesaler', 'pharmacy')"
-  )
 }
 
 describe('Phase 3 Milestone 1 — Registration Intake & Capacity Engine Suite', () => {

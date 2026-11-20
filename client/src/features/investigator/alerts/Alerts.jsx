@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react'
-import { AlertTriangle, ShieldAlert } from 'lucide-react'
+// PharmaTrace AI — Regulatory Alerts & Detection Leads
+// Milestone M8 Implementation — Connected to Live MariaDB Backend
+import { useEffect, useMemo, useState, useCallback } from 'react'
+import { AlertTriangle, ShieldAlert, RefreshCw, Cpu } from 'lucide-react'
 import {
   PageHeader,
   DataTable,
@@ -8,152 +10,190 @@ import {
   Drawer,
   Toast
 } from '../../../components/ui'
-import { useDemoData } from '../../../contexts/DemoData'
-import { TODAY } from '../../../data/fixtures'
+import * as investigatorApi from '../../../services/investigatorApi'
 
 const ALERT_TYPE_LABELS = {
-  repeated_scan: 'Repeated scan',
-  incomplete_traceability: 'Incomplete traceability',
-  expired_in_stock: 'Expired in stock',
-  unusual_pattern: 'Unusual pattern'
+  CLONED_QR_SUSPECT: 'Cloned QR suspect',
+  DUPLICATE_SCAN_ANOMALY: 'Repeated scan anomaly',
+  SHRINKAGE_SPIKE: 'Shrinkage spike',
+  SHIPMENT_QUANTITY_DISCREPANCY: 'Shipment discrepancy',
+  SHADOW_DIVERSION_RISK: 'Shadow diversion risk',
+  BROKEN_CUSTODY_HISTORY: 'Broken custody history',
+  GOVERNMENT_DIVERSION_ATTEMPT: 'Govt diversion attempt',
+  GOVERNMENT_DIVERSION_INDICATOR: 'Govt diversion indicator',
+  UNAUTHORIZED_DISPENSE_ATTEMPT: 'Unauthorized dispense attempt',
+  UNAUTHORIZED_CUSTODY_ACTIVITY: 'Unauthorized custody activity'
 }
 
 const REPORT_TYPE_LABELS = {
-  suspicious_origin: 'Suspicious origin',
-  damaged_packaging: 'Damaged packaging'
+  GOVERNMENT_MEDICINE_DIVERSION: 'Government medicine diversion',
+  COUNTERFEIT_SUSPECTED: 'Suspected counterfeit product',
+  EXPIRED_PRODUCT: 'Expired product for sale',
+  PACKAGING_DEFECT: 'Packaging / seal defect',
+  OTHER: 'General field report'
 }
 
 const formatLabel = (map, val) => map[val] ?? String(val ?? '').replace(/_/g, ' ')
 
 export default function Alerts() {
-  const {
-    alerts,
-    reports,
-    packages,
-    batches,
-    investigations,
-    orgName,
-    productOf,
-    createInvestigation,
-    updateAlert
-  } = useDemoData()
+  const [alerts, setAlerts] = useState([])
+  const [reports, setReports] = useState([])
+  const [totalAlerts, setTotalAlerts] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [scanning, setScanning] = useState(false)
+  const [error, setError] = useState('')
 
+  // Filters
   const [statusFilter, setStatusFilter] = useState('all')
   const [severityFilter, setSeverityFilter] = useState('all')
-  const [selectedAlertId, setSelectedAlertId] = useState(null)
-  const [selectedReportId, setSelectedReportId] = useState(null)
+  const [selectedAlert, setSelectedAlert] = useState(null)
+  const [selectedReport, setSelectedReport] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [actionErr, setActionErr] = useState('')
   const [toast, setToast] = useState('')
 
-  const filteredAlerts = useMemo(
-    () =>
-      alerts.filter((a) => {
-        if (statusFilter !== 'all' && a.status !== statusFilter) return false
-        if (severityFilter !== 'all' && a.severity !== severityFilter) return false
-        return true
-      }),
-    [alerts, statusFilter, severityFilter]
-  )
+  const loadAlerts = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await investigatorApi.getAlerts({
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        severity: severityFilter !== 'all' ? severityFilter : undefined,
+        limit: 100
+      })
+      setAlerts(res.alerts || [])
+      setTotalAlerts(res.total || 0)
+      setReports(res.reports || [])
+    } catch (err) {
+      setError(err.message || 'Failed to load regulatory alerts from backend.')
+    } finally {
+      setLoading(false)
+    }
+  }, [statusFilter, severityFilter])
 
-  const sel = alerts.find((a) => a.id === selectedAlertId) ?? null
-  const selReport = reports.find((r) => r.id === selectedReportId) ?? null
+  useEffect(() => {
+    loadAlerts()
+  }, [loadAlerts])
 
-  const linkedPkg = sel?.serial ? packages.find((p) => p.serial === sel.serial) : null
-  const linkedBatch = linkedPkg
-    ? batches.find((b) => b.id === linkedPkg.batchId)
-    : sel?.batchNo
-      ? batches.find((b) => b.no === sel.batchNo)
-      : null
-  const linkedCases = sel ? investigations.filter((inv) => inv.alertId === sel.id) : []
+  async function handleEvaluateRules() {
+    if (scanning) return
+    setScanning(true)
+    try {
+      const res = await investigatorApi.runAlertScan()
+      const newCount = res.newAlertsGenerated || 0
+      setToast(`Detection engine evaluated 5 statutory rules. ${newCount} new alert(s) generated.`)
+      loadAlerts()
+    } catch (err) {
+      setError(err.message || 'Anomaly scan execution failed.')
+    } finally {
+      setScanning(false)
+    }
+  }
 
-  const reportPkg = selReport?.serial
-    ? packages.find((p) => p.serial === selReport.serial)
-    : null
-  const reportBatch = reportPkg ? batches.find((b) => b.id === reportPkg.batchId) : null
-
-  async function openInvestigationFromAlert(alert) {
+  async function handleOpenInvestigationFromAlert(alert) {
     if (submitting) return
     setSubmitting(true)
     setActionErr('')
     try {
-      const inv = await createInvestigation({
+      const created = await investigatorApi.createCase({
         alertId: alert.id,
-        title: `${formatLabel(ALERT_TYPE_LABELS, alert.type)} — ${alert.serial || alert.batchNo || alert.id}`,
-        findings: `Opened from advisory alert ${alert.id}: ${alert.description}`
+        title: `${formatLabel(ALERT_TYPE_LABELS, alert.alert_type)} — ${alert.package_serial || alert.id}`,
+        findings: `Opened from advisory alert ${alert.id}: ${alert.summary}`,
+        priority: alert.severity === 'CRITICAL' ? 'critical' : alert.severity === 'HIGH' ? 'high' : 'medium'
       })
-      if (!inv || inv.ok === false) {
-        setActionErr(inv?.error || 'Could not open investigation.')
-        return
-      }
-      setToast(`Investigation ${inv.id} opened for alert ${alert.id}.`)
+      setToast(`Investigation case ${created.case_number} opened for alert ${alert.id}.`)
+      setSelectedAlert(null)
+      loadAlerts()
+    } catch (err) {
+      setActionErr(err.message || 'Could not open investigation case.')
     } finally {
       setSubmitting(false)
     }
   }
 
-  async function toggleAlertStatus(alert) {
+  async function handleToggleAlertStatus(alert) {
     if (submitting) return
     setSubmitting(true)
     setActionErr('')
-    const nextStatus = alert.status === 'open' ? 'resolved' : 'open'
+    const nextStatus = alert.status === 'OPEN' ? 'RESOLVED' : 'OPEN'
     try {
-      const res = await updateAlert(alert.id, {
-        status: nextStatus,
-        resolvedDate: nextStatus === 'resolved' ? TODAY : undefined
-      })
-      if (!res || res.ok === false) {
-        setActionErr(res?.error || 'Could not update alert status.')
-        return
-      }
-      setToast(
-        nextStatus === 'resolved'
-          ? `Alert ${alert.id} marked resolved.`
-          : `Alert ${alert.id} reopened.`
-      )
+      const updated = await investigatorApi.updateAlertStatus(alert.id, nextStatus)
+      setToast(`Alert ${alert.id} marked as ${nextStatus}.`)
+      setSelectedAlert(updated)
+      loadAlerts()
+    } catch (err) {
+      setActionErr(err.message || 'Could not update alert status.')
     } finally {
       setSubmitting(false)
     }
   }
 
-  async function openInvestigationFromReport(report) {
+  async function handleOpenInvestigationFromReport(report) {
     if (submitting) return
     setSubmitting(true)
     setActionErr('')
-    const serialLabel = report.serial?.trim() || 'Unspecified package'
+    const serialLabel = report.package_serial?.trim() || 'Unspecified package'
     try {
-      const inv = await createInvestigation({
-        alertId: null,
-        title: `Public report ${report.id} — ${serialLabel}`,
-        findings: `Consumer report (${formatLabel(REPORT_TYPE_LABELS, report.type)}): ${report.description}`,
+      const created = await investigatorApi.createCase({
+        title: `Public report ${report.report_number} — ${serialLabel}`,
+        findings: `Consumer report (${formatLabel(REPORT_TYPE_LABELS, report.report_type)}): ${report.description}`,
+        priority: report.report_type === 'GOVERNMENT_MEDICINE_DIVERSION' ? 'critical' : 'medium',
         evidence: [
-          report.serial?.trim()
-            ? `Public report ${report.id} submitted ${report.created} for ${report.serial.trim()}`
-            : `Public report ${report.id} submitted ${report.created} (no serial provided)`
+          {
+            evidenceType: 'reported_allegation',
+            description: `Field report ${report.report_number} filed for ${report.reported_store_name} (${report.city_district}): ${report.description}`,
+            sourceRef: report.report_number
+          }
         ]
       })
-      if (!inv || inv.ok === false) {
-        setActionErr(inv?.error || 'Could not open investigation from report.')
-        return
-      }
-      setToast(`Investigation ${inv.id} opened from public report ${report.id}.`)
+      setToast(`Investigation case ${created.case_number} opened from report ${report.report_number}.`)
+      setSelectedReport(null)
+    } catch (err) {
+      setActionErr(err.message || 'Could not open investigation from public report.')
     } finally {
       setSubmitting(false)
     }
   }
 
   const statusTabs = [
-    { key: 'all', label: `All (${alerts.length})` },
-    { key: 'open', label: `Open (${alerts.filter((a) => a.status === 'open').length})` },
-    { key: 'resolved', label: `Resolved (${alerts.filter((a) => a.status === 'resolved').length})` }
+    { key: 'all', label: `All Alerts (${totalAlerts})` },
+    { key: 'OPEN', label: 'Open' },
+    { key: 'INVESTIGATING', label: 'Investigating' },
+    { key: 'RESOLVED', label: 'Resolved' }
   ]
 
   return (
     <>
       <PageHeader
-        title="Supply-Chain Alerts & Leads"
-        description="Automated anomaly signals are an advisory lead — requires investigator review and never automated proof of counterfeiting."
+        title="Supply-Chain Alerts &amp; Regulatory Signals"
+        description="Persistent evidence-based regulatory alerts evaluated against actual MariaDB custody events and detection rules."
+        actions={
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              onClick={handleEvaluateRules}
+              disabled={scanning}
+            >
+              <Cpu size={14} className={scanning ? 'animate-spin' : ''} aria-hidden="true" />
+              {scanning ? 'Evaluating Rules...' : 'Run Anomaly Scan'}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={loadAlerts}
+              disabled={loading}
+            >
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} aria-hidden="true" />
+              Refresh
+            </Button>
+          </div>
+        }
       />
+
+      {error && (
+        <div role="alert" className="mb-5 rounded-lg border border-quarantine-line bg-quarantine-soft p-3 text-sm font-semibold text-quarantine">
+          {error}
+        </div>
+      )}
 
       <div
         role="note"
@@ -161,9 +201,9 @@ export default function Alerts() {
       >
         <AlertTriangle size={18} className="mt-0.5 shrink-0" aria-hidden="true" />
         <div>
-          <span className="font-semibold">Advisory lead — requires investigator review.</span>{' '}
-          Repeated scans, velocity anomalies, or incomplete custody logs can occur from benign
-          operational issues. Confirm findings through custody records before taking action.
+          <span className="font-semibold">Statutory Advisory Lead:</span>{' '}
+          All automated alerts represent deterministic rule-based indicators derived from verified supply chain logs.
+          Signals require human investigator verification before enforcement or administrative action.
         </div>
       </div>
 
@@ -195,17 +235,18 @@ export default function Alerts() {
             className="rounded-md border border-line bg-white px-3 py-1.5 text-sm"
           >
             <option value="all">All severities</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
+            <option value="CRITICAL">Critical</option>
+            <option value="HIGH">High</option>
+            <option value="MEDIUM">Medium</option>
+            <option value="LOW">Low</option>
           </select>
         </label>
       </div>
 
       <DataTable
-        rows={filteredAlerts}
-        empty="No alerts match the selected filters."
-        onRowClick={(row) => setSelectedAlertId(row.id)}
+        rows={alerts}
+        empty={loading ? 'Querying regulatory alerts...' : 'No alerts match the selected filters.'}
+        onRowClick={(row) => setSelectedAlert(row)}
         columns={[
           {
             key: 'id',
@@ -213,16 +254,16 @@ export default function Alerts() {
             render: (r) => <span className="id-text font-semibold">{r.id}</span>
           },
           {
-            key: 'type',
-            label: 'Type',
-            render: (r) => formatLabel(ALERT_TYPE_LABELS, r.type)
+            key: 'alert_type',
+            label: 'Rule Type',
+            render: (r) => formatLabel(ALERT_TYPE_LABELS, r.alert_type)
           },
           {
             key: 'target',
-            label: 'Target',
+            label: 'Target Serial / Store',
             render: (r) => (
               <span className="id-text whitespace-nowrap">
-                {r.serial || r.batchNo || 'Network'}
+                {r.package_serial || r.reported_store_name || 'Supply Chain'}
               </span>
             )
           },
@@ -237,46 +278,48 @@ export default function Alerts() {
             render: (r) => <StatusBadge status={r.status} />
           },
           {
-            key: 'created',
-            label: 'Created',
-            render: (r) => <span className="id-text whitespace-nowrap">{r.created}</span>
+            key: 'created_at',
+            label: 'Detected At',
+            render: (r) => (
+              <span className="id-text whitespace-nowrap text-xs">
+                {r.created_at ? new Date(r.created_at).toLocaleString() : '—'}
+              </span>
+            )
           }
         ]}
       />
 
       <section className="mt-8">
         <div className="mb-2">
-          <h2 className="text-base font-bold text-navy">Public Reports ({reports.length})</h2>
+          <h2 className="text-base font-bold text-navy">Public Field Reports ({reports.length})</h2>
           <p className="text-xs text-muted">
-            Incoming consumer and field reports submitted via public verification. Treat as
-            unverified leads until inspected.
+            Incoming consumer and healthcare facility reports submitted via public verification. Treat as unverified leads until corroborated.
           </p>
         </div>
         <DataTable
           rows={reports}
-          empty="No public reports submitted."
-          onRowClick={(row) => setSelectedReportId(row.id)}
+          empty="No public field reports submitted."
+          onRowClick={(row) => setSelectedReport(row)}
           columns={[
             {
-              key: 'id',
-              label: 'ID',
-              render: (r) => <span className="id-text font-semibold">{r.id}</span>
+              key: 'report_number',
+              label: 'Report No',
+              render: (r) => <span className="id-text font-semibold">{r.report_number}</span>
             },
             {
-              key: 'serial',
+              key: 'package_serial',
               label: 'Serial',
-              render: (r) => (
-                <span className="id-text whitespace-nowrap">{r.serial || '—'}</span>
-              )
+              render: (r) => <span className="id-text whitespace-nowrap">{r.package_serial || '—'}</span>
             },
             {
-              key: 'type',
-              label: 'Report Type',
-              render: (r) => formatLabel(REPORT_TYPE_LABELS, r.type)
+              key: 'report_type',
+              label: 'Report Category',
+              render: (r) => formatLabel(REPORT_TYPE_LABELS, r.report_type)
             },
             {
-              key: 'reporter',
-              label: 'Reporter'
+              key: 'reported_store_name',
+              label: 'Reported Store / Location',
+              render: (r) => `${r.reported_store_name} (${r.city_district})`
             },
             {
               key: 'status',
@@ -284,160 +327,102 @@ export default function Alerts() {
               render: (r) => <StatusBadge status={r.status} />
             },
             {
-              key: 'created',
-              label: 'Created',
-              render: (r) => <span className="id-text whitespace-nowrap">{r.created}</span>
+              key: 'created_at',
+              label: 'Filed',
+              render: (r) => (
+                <span className="id-text whitespace-nowrap text-xs">
+                  {r.created_at ? new Date(r.created_at).toLocaleDateString() : '—'}
+                </span>
+              )
             }
           ]}
         />
       </section>
 
+      {/* Alert Drawer */}
       <Drawer
-        open={!!sel}
-        onClose={() => setSelectedAlertId(null)}
-        title={sel ? `Alert ${sel.id}` : 'Alert details'}
+        open={!!selectedAlert}
+        onClose={() => setSelectedAlert(null)}
+        title={selectedAlert ? `Regulatory Alert ${selectedAlert.id}` : 'Alert Details'}
       >
-        {sel && (
+        {selectedAlert && (
           <div className="space-y-5">
             <div className="flex items-start gap-2 rounded-md border border-amber-line bg-amber-soft p-3 text-xs text-amber-ink">
               <ShieldAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
               <span>
-                <strong>Advisory lead — requires investigator review.</strong> This automated signal
-                is not proof of counterfeiting.
+                <strong>Advisory Lead — Human Review Required.</strong> Verify supply-chain manifests and custody history before initiating enforcement.
               </span>
             </div>
 
             <dl className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <dt className="text-muted">Alert ID</dt>
-                <dd className="id-text font-semibold">{sel.id}</dd>
+                <dd className="id-text font-semibold">{selectedAlert.id}</dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-muted">Type</dt>
-                <dd className="font-semibold">{formatLabel(ALERT_TYPE_LABELS, sel.type)}</dd>
+                <dt className="text-muted">Rule Type</dt>
+                <dd className="font-semibold">{formatLabel(ALERT_TYPE_LABELS, selectedAlert.alert_type)}</dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-muted">Target</dt>
-                <dd className="id-text font-semibold">
-                  {sel.serial || sel.batchNo || 'Network'}
-                </dd>
+                <dt className="text-muted">Target Serial</dt>
+                <dd className="id-text font-semibold">{selectedAlert.package_serial || 'None'}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted">Severity</dt>
-                <dd>
-                  <StatusBadge status={sel.severity} />
-                </dd>
+                <dd><StatusBadge status={selectedAlert.severity} /></dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted">Status</dt>
-                <dd>
-                  <StatusBadge status={sel.status} />
-                </dd>
+                <dd><StatusBadge status={selectedAlert.status} /></dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-muted">Created</dt>
-                <dd className="id-text">{sel.created}</dd>
+                <dt className="text-muted">Suspect Organization</dt>
+                <dd className="font-medium">{selectedAlert.suspect_org_name || 'Unspecified'}</dd>
               </div>
-              {sel.resolvedDate && (
-                <div className="flex justify-between">
-                  <dt className="text-muted">Resolved date</dt>
-                  <dd className="id-text">{sel.resolvedDate}</dd>
-                </div>
-              )}
+              <div className="flex justify-between">
+                <dt className="text-muted">Detected At</dt>
+                <dd className="id-text">{new Date(selectedAlert.created_at).toLocaleString()}</dd>
+              </div>
             </dl>
 
             <div>
-              <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
-                Description
-              </h3>
-              <p className="rounded-md border border-line bg-surface p-3 text-sm">
-                {sel.description}
-              </p>
+              <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">Summary</h3>
+              <p className="rounded-md border border-line bg-surface p-3 text-sm font-medium">{selectedAlert.summary}</p>
             </div>
 
-            {linkedPkg && (
-              <div className="rounded-md border border-line p-3 text-sm">
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                  Linked package
-                </h3>
-                <dl className="space-y-1.5">
-                  <div className="flex justify-between">
-                    <dt className="text-muted">Serial</dt>
-                    <dd className="id-text font-semibold">{linkedPkg.serial}</dd>
-                  </div>
-                  {linkedBatch && (
-                    <div className="flex justify-between">
-                      <dt className="text-muted">Medicine</dt>
-                      <dd>
-                        {productOf(linkedBatch.productId)?.name}{' '}
-                        {productOf(linkedBatch.productId)?.strength}
-                      </dd>
-                    </div>
-                  )}
-                  {linkedBatch && (
-                    <div className="flex justify-between">
-                      <dt className="text-muted">Batch</dt>
-                      <dd className="id-text">{linkedBatch.no}</dd>
-                    </div>
-                  )}
-                  <div className="flex justify-between">
-                    <dt className="text-muted">Custodian</dt>
-                    <dd>{orgName(linkedPkg.custodian)}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-muted">Verify count</dt>
-                    <dd className="id-text font-semibold">{linkedPkg.verifyCount ?? 0}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-muted">Shipment</dt>
-                    <dd className="id-text">{linkedPkg.shipmentRef ?? '—'}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-muted">Package status</dt>
-                    <dd>
-                      <StatusBadge status={linkedPkg.status} />
-                    </dd>
-                  </div>
-                </dl>
+            {selectedAlert.details && (
+              <div>
+                <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">Triggering Evidence &amp; Findings</h3>
+                <p className="rounded-md border border-line bg-surface p-3 text-sm text-ink">{selectedAlert.details}</p>
               </div>
             )}
 
-            {!linkedPkg && linkedBatch && (
-              <div className="rounded-md border border-line p-3 text-sm">
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                  Linked batch
-                </h3>
-                <dl className="space-y-1.5">
-                  <div className="flex justify-between">
-                    <dt className="text-muted">Batch No</dt>
-                    <dd className="id-text font-semibold">{linkedBatch.no}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-muted">Product</dt>
-                    <dd>{productOf(linkedBatch.productId)?.name}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-muted">Expiry</dt>
-                    <dd className="id-text">{linkedBatch.exp}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-muted">Release</dt>
-                    <dd>{linkedBatch.release}</dd>
-                  </div>
-                </dl>
+            {selectedAlert.feature_attributions && (
+              <div className="rounded-md border border-line bg-surface p-3 text-xs space-y-1.5">
+                <h3 className="font-semibold uppercase tracking-wide text-muted">Detection Rule Specifications</h3>
+                <div className="text-navy font-mono">
+                  Rule: <strong>{selectedAlert.feature_attributions.rule || selectedAlert.alert_type}</strong>
+                </div>
+                {selectedAlert.feature_attributions.disposition_category && (
+                  <div>Category: <span className="id-text">{selectedAlert.feature_attributions.disposition_category}</span></div>
+                )}
+                {selectedAlert.feature_attributions.note && (
+                  <div className="text-muted italic">{selectedAlert.feature_attributions.note}</div>
+                )}
+                <div className="pt-1 text-[11px] text-muted border-t border-line">
+                  Deterministic Rule Evaluation · Not ML Prediction
+                </div>
               </div>
             )}
 
-            {linkedCases.length > 0 && (
+            {selectedAlert.linked_cases && selectedAlert.linked_cases.length > 0 && (
               <div className="rounded-md border border-line bg-surface p-3 text-sm">
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                  Linked investigations
-                </h3>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Linked Cases</h3>
                 <ul className="space-y-1.5">
-                  {linkedCases.map((c) => (
+                  {selectedAlert.linked_cases.map((c) => (
                     <li key={c.id} className="flex items-center justify-between gap-2">
                       <span className="truncate">
-                        <span className="id-text font-semibold">{c.id}</span> · {c.title}
+                        <span className="id-text font-semibold">{c.case_number || c.id}</span> · {c.title}
                       </span>
                       <StatusBadge status={c.status} />
                     </li>
@@ -453,99 +438,71 @@ export default function Alerts() {
             )}
 
             <div className="flex flex-wrap gap-2 border-t border-line pt-4">
-              <Button variant="primary" disabled={submitting} onClick={() => openInvestigationFromAlert(sel)}>
-                Open Investigation
+              <Button
+                variant="primary"
+                disabled={submitting}
+                onClick={() => handleOpenInvestigationFromAlert(selectedAlert)}
+              >
+                Open Investigation Case
               </Button>
-              <Button variant="secondary" disabled={submitting} onClick={() => toggleAlertStatus(sel)}>
-                {sel.status === 'open' ? 'Mark Resolved' : 'Reopen'}
+              <Button
+                variant="secondary"
+                disabled={submitting}
+                onClick={() => handleToggleAlertStatus(selectedAlert)}
+              >
+                {selectedAlert.status === 'OPEN' ? 'Mark Resolved' : 'Reopen Lead'}
               </Button>
             </div>
           </div>
         )}
       </Drawer>
 
+      {/* Public Report Drawer */}
       <Drawer
-        open={!!selReport}
-        onClose={() => setSelectedReportId(null)}
-        title={selReport ? `Public Report ${selReport.id}` : 'Public Report'}
+        open={!!selectedReport}
+        onClose={() => setSelectedReport(null)}
+        title={selectedReport ? `Public Report ${selectedReport.report_number}` : 'Public Report'}
       >
-        {selReport && (
+        {selectedReport && (
           <div className="space-y-5">
             <div className="flex items-start gap-2 rounded-md border border-amber-line bg-amber-soft p-3 text-xs text-amber-ink">
               <ShieldAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
               <span>
-                <strong>Advisory lead — requires investigator review.</strong> Public reports reflect
-                unverified field observations until corroborated.
+                <strong>Unverified Consumer Submission.</strong> Public reports reflect field claims until corroborated through physical inspection.
               </span>
             </div>
 
             <dl className="space-y-2 text-sm">
               <div className="flex justify-between">
-                <dt className="text-muted">Report ID</dt>
-                <dd className="id-text font-semibold">{selReport.id}</dd>
+                <dt className="text-muted">Report No</dt>
+                <dd className="id-text font-semibold">{selectedReport.report_number}</dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-muted">Serial</dt>
-                <dd className="id-text font-semibold">{selReport.serial || '—'}</dd>
+                <dt className="text-muted">Category</dt>
+                <dd className="font-semibold">{formatLabel(REPORT_TYPE_LABELS, selectedReport.report_type)}</dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-muted">Report type</dt>
-                <dd className="font-semibold">
-                  {formatLabel(REPORT_TYPE_LABELS, selReport.type)}
-                </dd>
+                <dt className="text-muted">Target Serial</dt>
+                <dd className="id-text font-semibold">{selectedReport.package_serial || 'None provided'}</dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-muted">Reporter</dt>
-                <dd>{selReport.reporter}</dd>
+                <dt className="text-muted">Store Name</dt>
+                <dd className="font-medium">{selectedReport.reported_store_name}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted">Store Address</dt>
+                <dd className="text-right text-xs">{selectedReport.reported_store_address}, {selectedReport.city_district}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted">Status</dt>
-                <dd>
-                  <StatusBadge status={selReport.status} />
-                </dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-muted">Created</dt>
-                <dd className="id-text">{selReport.created}</dd>
+                <dd><StatusBadge status={selectedReport.status} /></dd>
               </div>
             </dl>
 
             <div>
-              <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
-                Description
-              </h3>
-              <p className="rounded-md border border-line bg-surface p-3 text-sm">
-                {selReport.description}
-              </p>
+              <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">Allegation Description</h3>
+              <p className="rounded-md border border-line bg-surface p-3 text-sm">{selectedReport.description}</p>
             </div>
-
-            {reportPkg && (
-              <div className="rounded-md border border-line p-3 text-sm">
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-                  Registry record
-                </h3>
-                <dl className="space-y-1.5">
-                  {reportBatch && (
-                    <div className="flex justify-between">
-                      <dt className="text-muted">Product</dt>
-                      <dd>
-                        {productOf(reportBatch.productId)?.name} ({reportBatch.no})
-                      </dd>
-                    </div>
-                  )}
-                  <div className="flex justify-between">
-                    <dt className="text-muted">Custodian</dt>
-                    <dd>{orgName(reportPkg.custodian)}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-muted">Status</dt>
-                    <dd>
-                      <StatusBadge status={reportPkg.status} />
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-            )}
 
             {actionErr && (
               <p role="alert" className="rounded-md border border-quarantine-line bg-quarantine-soft p-2.5 text-xs font-semibold text-quarantine">
@@ -554,8 +511,12 @@ export default function Alerts() {
             )}
 
             <div className="border-t border-line pt-4">
-              <Button variant="primary" disabled={submitting} onClick={() => openInvestigationFromReport(selReport)}>
-                Open Investigation
+              <Button
+                variant="primary"
+                disabled={submitting}
+                onClick={() => handleOpenInvestigationFromReport(selectedReport)}
+              >
+                Open Investigation from Report
               </Button>
             </div>
           </div>

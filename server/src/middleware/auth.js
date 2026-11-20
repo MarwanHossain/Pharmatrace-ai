@@ -55,6 +55,7 @@ export async function authenticateToken(req, res, next) {
         u.org_id, 
         u.status, 
         u.token_version, 
+        o.name AS org_name,
         o.status AS org_status
       FROM users u
       LEFT JOIN organizations o ON u.org_id = o.id
@@ -113,6 +114,7 @@ export async function authenticateToken(req, res, next) {
       email: user.email,
       role: user.role,
       orgId: user.org_id || null,
+      orgName: user.org_name || null,
       tokenVersion: user.token_version
     }
 

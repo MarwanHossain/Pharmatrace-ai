@@ -2,7 +2,7 @@
 import { test, describe, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { getPool, closeDatabasePool, execute } from '../src/config/database.js'
-import { runMigrations, getAppliedMigrations } from '../src/database/migrator.js'
+import { runMigrations, getAppliedMigrations, createMigrationConnection } from '../src/database/migrator.js'
 
 describe('PharmaTrace AI — Relational Schema & Integrity Validation', () => {
   let pool = null
@@ -17,14 +17,25 @@ describe('PharmaTrace AI — Relational Schema & Integrity Validation', () => {
     await closeDatabasePool()
   })
 
-  test('All schema migrations (including 022) are recorded in schema_migrations', async () => {
-    const applied = await getAppliedMigrations(pool)
-    assert.equal(applied.length, 22, 'All 22 migrations must be recorded')
+  test('All schema migrations (including 028) are recorded in schema_migrations', async () => {
+    const migConn = await createMigrationConnection()
+    try {
+      const applied = await getAppliedMigrations(migConn)
+      assert.equal(applied.length, 28, 'All 28 migrations must be recorded')
 
-    const versions = applied.map(m => m.version)
-    assert.ok(versions.includes('001'))
-    assert.ok(versions.includes('021'))
-    assert.ok(versions.includes('022'))
+      const versions = applied.map(m => m.version)
+      assert.ok(versions.includes('001'))
+      assert.ok(versions.includes('021'))
+      assert.ok(versions.includes('022'))
+      assert.ok(versions.includes('023'))
+      assert.ok(versions.includes('024'))
+      assert.ok(versions.includes('025'))
+      assert.ok(versions.includes('026'))
+      assert.ok(versions.includes('027'))
+      assert.ok(versions.includes('028'))
+    } finally {
+      await migConn.end()
+    }
   })
 
   test('Every required table exists in the database', async () => {
@@ -53,7 +64,11 @@ describe('PharmaTrace AI — Relational Schema & Integrity Validation', () => {
       'traceability_events',
       'investigation_alerts',
       'public_reports',
-      'public_report_attachments'
+      'public_report_attachments',
+      'admin_audit_log',
+      'investigation_cases',
+      'investigation_evidence',
+      'investigation_case_audit_log'
     ]
 
     for (const expected of expectedTables) {
@@ -129,8 +144,13 @@ describe('PharmaTrace AI — Relational Schema & Integrity Validation', () => {
       assert.equal(updatedAvailability.manufacturer, true, 'Manufacturer must remain available')
       assert.equal(updatedAvailability.pharmacy, true, 'Pharmacy must remain available')
     } finally {
-      // Step 3: Clean up test organization
-      await execute('DELETE FROM organizations WHERE id = ?', [testDistId])
+      // Step 3: Clean up test organization using migration connection
+      const migConn = await createMigrationConnection()
+      try {
+        await migConn.query('DELETE FROM organizations WHERE id = ?', [testDistId])
+      } finally {
+        await migConn.end()
+      }
     }
 
     // Step 4: Verify distributor is available again after removal
@@ -189,9 +209,14 @@ describe('PharmaTrace AI — Relational Schema & Integrity Validation', () => {
         'Invalid JSON must violate CHECK constraint'
       )
     } finally {
-      // Clean up test records
-      await execute('DELETE FROM registration_submissions WHERE registration_id = ?', [regId])
-      await execute('DELETE FROM organization_registrations WHERE id = ?', [regId])
+      // Clean up test records using migration connection
+      const migConn = await createMigrationConnection()
+      try {
+        await migConn.query('DELETE FROM registration_submissions WHERE registration_id = ?', [regId])
+        await migConn.query('DELETE FROM organization_registrations WHERE id = ?', [regId])
+      } finally {
+        await migConn.end()
+      }
     }
   })
 
@@ -235,7 +260,12 @@ describe('PharmaTrace AI — Relational Schema & Integrity Validation', () => {
         'Duplicate reference_number must be rejected by UNIQUE constraint'
       )
     } finally {
-      await execute('DELETE FROM organization_registrations WHERE id = ?', [regId1])
+      const migConn = await createMigrationConnection()
+      try {
+        await migConn.query('DELETE FROM organization_registrations WHERE id = ?', [regId1])
+      } finally {
+        await migConn.end()
+      }
     }
   })
 })

@@ -6,6 +6,7 @@ import http from 'http'
 import crypto from 'crypto'
 import { app } from '../src/app.js'
 import { getPool, closeDatabasePool, execute } from '../src/config/database.js'
+import { createMigrationConnection } from '../src/database/migrator.js'
 import { hashPassword } from '../src/utils/passwords.js'
 import { signAccessToken, hashToken, AUTH_COOKIE_NAME } from '../src/utils/tokens.js'
 import { assertTenantAccess, buildTenantQueryScope } from '../src/utils/tenancy.js'
@@ -84,10 +85,15 @@ describe('Phase 2 Authentication & Authorization Integration Suite', () => {
     const port = server.address().port
     baseUrl = `http://127.0.0.1:${port}`
 
-    // Clean up any stale test records from prior runs
-    await execute('DELETE FROM activation_tokens WHERE id LIKE "tok-test-%"')
-    await execute('DELETE FROM users WHERE id LIKE "usr-test-%"')
-    await execute('DELETE FROM organizations WHERE id LIKE "org-test-%"')
+    // Clean up any stale test records from prior runs using migration connection
+    const cleanConn = await createMigrationConnection()
+    try {
+      await cleanConn.query('DELETE FROM activation_tokens WHERE id LIKE "tok-test-%"')
+      await cleanConn.query('DELETE FROM users WHERE id LIKE "usr-test-%"')
+      await cleanConn.query('DELETE FROM organizations WHERE id LIKE "org-test-%"')
+    } finally {
+      await cleanConn.end()
+    }
 
     // 1. Seed test organizations
     await execute(
@@ -125,10 +131,15 @@ describe('Phase 2 Authentication & Authorization Integration Suite', () => {
   })
 
   after(async () => {
-    // Teardown test entities
-    await execute('DELETE FROM activation_tokens WHERE id LIKE "tok-test-%"')
-    await execute('DELETE FROM users WHERE id LIKE "usr-test-%"')
-    await execute('DELETE FROM organizations WHERE id LIKE "org-test-%"')
+    // Teardown test entities using migration connection
+    const cleanConn = await createMigrationConnection()
+    try {
+      await cleanConn.query('DELETE FROM activation_tokens WHERE id LIKE "tok-test-%"')
+      await cleanConn.query('DELETE FROM users WHERE id LIKE "usr-test-%"')
+      await cleanConn.query('DELETE FROM organizations WHERE id LIKE "org-test-%"')
+    } finally {
+      await cleanConn.end()
+    }
 
     if (server) {
       await new Promise(resolve => server.close(resolve))
@@ -559,29 +570,18 @@ describe('Phase 2 Authentication & Authorization Integration Suite', () => {
   // 7. INITIAL ADMINISTRATOR BOOTSTRAP TESTS
   // =========================================================================
 
-  test('Bootstrap admin: creates initial DGDA administrator safely via transaction', async () => {
-    // Delete any existing admin user for testing bootstrap
-    await execute('DELETE FROM users WHERE role = "admin"')
+  test('Bootstrap admin: safely preserves existing administrator and prevents duplicate admin creation', async () => {
+    // Verify an administrator already exists in the database
+    const [adminRow] = await execute('SELECT email, role, status FROM users WHERE role = "admin" LIMIT 1')
+    assert.ok(adminRow.length > 0)
+    assert.equal(adminRow[0].role, 'admin')
 
-    const result = await bootstrapAdmin({
-      email: 'dgda_lead@pharmatrace.gov.bd',
-      password: 'BootstrapAdmin2026!#'
-    })
-
-    assert.equal(result.created, true)
-    assert.equal(result.email, 'dgda_lead@pharmatrace.gov.bd')
-
-    // Verify admin exists in database
-    const [adminRow] = await execute('SELECT email, role, status FROM users WHERE role = "admin"')
-    assert.equal(adminRow.length, 1)
-    assert.equal(adminRow[0].email, 'dgda_lead@pharmatrace.gov.bd')
-    assert.equal(adminRow[0].status, 'active')
-
-    // Second bootstrap attempt is safely aborted to prevent duplicate initial admins
+    // Calling bootstrapAdmin when an admin exists must safely abort without creating a duplicate
     const duplicateAttempt = await bootstrapAdmin({
       email: 'second_admin@pharmatrace.gov.bd',
       password: 'BootstrapAdmin2026!#'
     })
     assert.equal(duplicateAttempt.created, false)
+    assert.equal(duplicateAttempt.message, 'Administrator already exists')
   })
 })

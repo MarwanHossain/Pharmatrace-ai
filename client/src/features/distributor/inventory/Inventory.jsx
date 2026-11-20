@@ -1,50 +1,64 @@
-import { useState, useMemo } from 'react'
-import { Search, ShieldAlert } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, Drawer, Timeline } from '../../../components/ui'
-import { useDemoData } from '../../../contexts/DemoData'
-import { useDemoSession } from '../../../contexts/DemoSession'
-import { getCurrentDateIso } from '../../../services/supplyChain'
+// PharmaTrace AI — Distributor Custody Inventory Management
+// Connected to live authenticated MariaDB backend APIs (Milestone M7.3)
+
+import { useState, useMemo, useEffect, useCallback } from 'react'
+import { Search, RefreshCw, AlertCircle } from 'lucide-react'
+import { PageHeader, DataTable, StatusBadge, Drawer, Button } from '../../../components/ui'
+import { getCustodyInventory } from '../../../services/shipmentApi'
 
 export default function Inventory() {
-  const { packages, batches, orgName, productOf } = useDemoData()
-  const { orgId, organization } = useDemoSession()
+  const [inventory, setInventory] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState('')
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [selectedSerial, setSelectedSerial] = useState(null)
 
-  const today = getCurrentDateIso()
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    setFetchError('')
+    try {
+      const res = await getCustodyInventory({
+        status: statusFilter || undefined,
+        search: query || undefined,
+        limit: 100
+      })
+      setInventory(res.inventory || [])
+    } catch (e) {
+      setFetchError(e.message || 'Failed to load custody inventory.')
+    } finally {
+      setLoading(false)
+    }
+  }, [query, statusFilter])
 
-  const batchById = useMemo(() => {
-    const map = new Map()
-    for (const b of batches) map.set(b.id, b)
-    return map
-  }, [batches])
-
-  const inventoryPackages = useMemo(() => {
-    const normalized = query.trim().toUpperCase()
-    return packages.filter(
-      p =>
-        p.custodian === orgId &&
-        (p.status === 'accepted' || p.status === 'quarantined' || p.status === 'discrepancy') &&
-        (!statusFilter || p.status === statusFilter) &&
-        (!normalized || p.serial.toUpperCase().includes(normalized))
-    )
-  }, [packages, orgId, query, statusFilter])
+  useEffect(() => {
+    loadData()
+  }, [loadData])
 
   const selectedPackage = useMemo(
-    () => inventoryPackages.find(p => p.serial === selectedSerial) ?? null,
-    [inventoryPackages, selectedSerial]
+    () => inventory.find(p => p.serial === selectedSerial) ?? null,
+    [inventory, selectedSerial]
   )
-
-  const selectedBatch = selectedPackage ? batchById.get(selectedPackage.batchId) : null
-  const selectedProduct = selectedBatch ? productOf(selectedBatch.productId) : null
 
   return (
     <>
       <PageHeader
-        title="Inventory"
-        description={`Accepted and quarantined medicine packages currently held in custody at ${organization?.name ?? orgName(orgId)}.`}
+        title="Custody Inventory"
+        description="Accepted and quarantined medicine packages currently held in physical custody."
+        actions={
+          <Button variant="secondary" onClick={loadData} disabled={loading}>
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </Button>
+        }
       />
+
+      {fetchError && (
+        <div role="alert" className="mb-4 flex items-center gap-2 rounded-md border border-quarantine-line bg-quarantine-soft p-3 text-sm text-quarantine">
+          <AlertCircle size={16} />
+          <span>{fetchError}</span>
+        </div>
+      )}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="relative">
@@ -79,7 +93,7 @@ export default function Inventory() {
       </div>
 
       <DataTable
-        empty="No packages in custody match your search."
+        empty="No packages in custody match your criteria."
         onRowClick={r => setSelectedSerial(r.serial)}
         columns={[
           {
@@ -90,95 +104,73 @@ export default function Inventory() {
           {
             key: 'batch',
             label: 'Batch',
-            render: r => {
-              const b = batchById.get(r.batchId)
-              return <span className="id-text whitespace-nowrap">{b?.no ?? '—'}</span>
-            }
+            render: r => <span className="id-text whitespace-nowrap">{r.batch_no || '—'}</span>
           },
           {
             key: 'product',
             label: 'Product',
-            render: r => {
-              const b = batchById.get(r.batchId)
-              const pr = b ? productOf(b.productId) : null
-              return pr ? `${pr.name} ${pr.strength}` : '—'
-            }
+            render: r => (
+              <div>
+                <div className="font-semibold">{r.product_name || r.generic_name || '—'}</div>
+                <div className="text-xs text-muted">{r.strength || ''}</div>
+              </div>
+            )
           },
           {
-            key: 'expiry',
+            key: 'exp',
             label: 'Expiry',
-            render: r => {
-              const b = batchById.get(r.batchId)
-              const expired = Boolean(b?.exp && b.exp < today)
-              return (
-                <div className="flex items-center gap-1.5">
-                  <span className="id-text whitespace-nowrap">{b?.exp ?? '—'}</span>
-                  {expired && <StatusBadge status="expired" />}
-                </div>
-              )
-            }
+            render: r => <span className="id-text whitespace-nowrap">{r.exp || '—'}</span>
           },
           {
             key: 'status',
-            label: 'Status',
+            label: 'Custody Status',
             render: r => <StatusBadge status={r.status} />
           }
         ]}
-        rows={inventoryPackages}
+        rows={inventory}
       />
 
+      {/* Drawer */}
       <Drawer
         open={!!selectedPackage}
         onClose={() => setSelectedSerial(null)}
-        title="Package details"
+        title={selectedPackage ? `Package ${selectedPackage.serial}` : 'Package details'}
       >
         {selectedPackage && (
-          <>
-            {selectedPackage.status === 'quarantined' && (
-              <div className="mb-4 flex items-start gap-2 rounded-md border border-quarantine-line bg-quarantine-soft p-3 text-xs text-quarantine">
-                <ShieldAlert size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-                <div>
-                  <div className="font-bold">Quarantined — excluded from dispatchable stock</div>
-                  {selectedPackage.quarantineReason && (
-                    <div>Reason: {selectedPackage.quarantineReason}</div>
-                  )}
-                </div>
-              </div>
-            )}
-            <dl className="mb-5 space-y-2 text-sm">
-              {[
-                ['Serial', selectedPackage.serial],
-                [
-                  'Product',
-                  selectedProduct
-                    ? `${selectedProduct.name} ${selectedProduct.strength}`
-                    : '—'
-                ],
-                ['Pack size', selectedProduct?.packSize ?? '—'],
-                ['Batch', selectedBatch?.no ?? '—'],
-                ['Manufactured', selectedBatch?.mfd ?? '—'],
-                ['Expires', selectedBatch?.exp ?? '—'],
-                ['Custody', orgName(selectedPackage.custodian)],
-                ['Shipment', selectedPackage.shipmentRef ?? '—']
-              ].map(([k, v]) => (
-                <div key={k} className="flex justify-between gap-4">
-                  <dt className="text-muted">{k}</dt>
-                  <dd className="id-text text-right font-semibold">{v}</dd>
-                </div>
-              ))}
+          <div className="space-y-4 text-sm">
+            <dl className="space-y-2">
               <div className="flex justify-between">
+                <dt className="text-muted">Serial Number</dt>
+                <dd className="id-text font-semibold">{selectedPackage.serial}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted">Product</dt>
+                <dd className="font-semibold">{selectedPackage.product_name || selectedPackage.generic_name}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted">Strength / Form</dt>
+                <dd className="font-semibold">{selectedPackage.strength} · {selectedPackage.dosage_form}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted">Batch Number</dt>
+                <dd className="id-text font-semibold">{selectedPackage.batch_no}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted">Expiry Date</dt>
+                <dd className="id-text font-semibold">{selectedPackage.exp}</dd>
+              </div>
+              <div className="flex items-center justify-between">
                 <dt className="text-muted">Status</dt>
                 <StatusBadge status={selectedPackage.status} />
               </div>
+              {selectedPackage.current_shipment_ref && (
+                <div className="flex justify-between">
+                  <dt className="text-muted">Shipment Reference</dt>
+                  <dd className="id-text font-semibold">{selectedPackage.current_shipment_ref}</dd>
+                </div>
+              )}
             </dl>
-            <h3 className="mb-3 text-sm font-bold text-navy">Custody history</h3>
-            <Timeline
-              items={(selectedPackage.history ?? []).map(([title, orgId, date]) => ({
-                title,
-                meta: `${orgName(orgId)} · ${date}`
-              }))}
-            />
-          </>
+          </div>
         )}
       </Drawer>
     </>

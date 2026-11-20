@@ -35,3 +35,6 @@ export function Modal({ open, title, onClose, children, actions }) {
       {actions && <div className="flex shrink-0 justify-end gap-2 border-t border-line px-5 py-3">{actions}</div>}
     </div></div>
 }
+
+export { default as DocumentPreviewModal } from './DocumentPreviewModal'
+

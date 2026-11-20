@@ -7,12 +7,15 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test --test-concurrency=1 tests/*.test.js",
+    "test": "node --env-file=.env.test --test --test-concurrency=1 tests/*.test.js",
+    "test:migrate": "node --env-file=.env.test src/database/migrate.js",
+    "test:status": "node --env-file=.env.test src/database/migrate.js --status",
     "migrate": "node src/database/migrate.js",
     "migrate:status": "node src/database/migrate.js --status"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
+    "bwip-js": "^4.11.4",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
@@ -20,6 +23,7 @@
     "express-rate-limit": "^8.7.4",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.5.0",
-    "mysql2": "^3.12.0"
+    "mysql2": "^3.12.0",
+    "qrcode": "^1.5.4"
   }
 }

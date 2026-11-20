@@ -36,6 +36,17 @@ export async function startServer(port = env.PORT) {
         logger.warn(`MariaDB initial check: ${dbStatus.message} (status: ${dbStatus.status}). Server will retry on demand.`)
       }
 
+      if (env.NODE_ENV === 'development') {
+        const { setFakeTransport } = await import('./services/notification.service.js')
+        setFakeTransport(async (payload) => {
+          logger.info(`[DEV NOTIFICATION] ${payload.type} for ${payload.recipientEmail}: ${payload.activationUrl || payload.resubmissionUrl || ''}`, {
+            recipient: payload.recipientEmail,
+            rawToken: payload.rawToken
+          })
+        })
+        logger.info('Development in-memory notification logger initialized.')
+      }
+
       resolve(httpServer)
     })
   })

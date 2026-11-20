@@ -9,6 +9,7 @@ import http from 'http'
 import crypto from 'crypto'
 import { app } from '../src/app.js'
 import { getPool, closeDatabasePool } from '../src/config/database.js'
+import { createMigrationConnection } from '../src/database/migrator.js'
 import {
   submitRegistration,
   resetRefAttemptsForTest,
@@ -85,36 +86,41 @@ async function createTestRegistration(overrides = {}) {
 async function cleanupTestData() {
   resetRefAttemptsForTest()
 
-  const [testRegs] = await pool.query(
-    "SELECT id FROM organization_registrations WHERE org_name LIKE 'TrackTest %'"
-  )
-
-  if (testRegs.length > 0) {
-    const regIds = testRegs.map(r => r.id)
-    const placeholders = regIds.map(() => '?').join(',')
-
-    // Get stored filenames to delete from disk
-    const [docs] = await pool.query(
-      `SELECT stored_filename FROM registration_documents WHERE registration_id IN (${placeholders})`,
-      regIds
+  const migConn = await createMigrationConnection()
+  try {
+    const [testRegs] = await migConn.query(
+      "SELECT id FROM organization_registrations WHERE org_name LIKE 'TrackTest %'"
     )
 
-    for (const doc of docs) {
-      const filePath = path.join(UPLOAD_DIR, doc.stored_filename)
-      if (fs.existsSync(filePath)) {
-        try {
-          fs.unlinkSync(filePath)
-        } catch {
-          // ignore
+    if (testRegs.length > 0) {
+      const regIds = testRegs.map(r => r.id)
+      const placeholders = regIds.map(() => '?').join(',')
+
+      // Get stored filenames to delete from disk
+      const [docs] = await migConn.query(
+        `SELECT stored_filename FROM registration_documents WHERE registration_id IN (${placeholders})`,
+        regIds
+      )
+
+      for (const doc of docs) {
+        const filePath = path.join(UPLOAD_DIR, doc.stored_filename)
+        if (fs.existsSync(filePath)) {
+          try {
+            fs.unlinkSync(filePath)
+          } catch {
+            // ignore
+          }
         }
       }
-    }
 
-    await pool.query(`DELETE FROM registration_access_tokens WHERE registration_id IN (${placeholders})`, regIds)
-    await pool.query(`DELETE FROM registration_audit_log WHERE registration_id IN (${placeholders})`, regIds)
-    await pool.query(`DELETE FROM registration_documents WHERE registration_id IN (${placeholders})`, regIds)
-    await pool.query(`DELETE FROM registration_submissions WHERE registration_id IN (${placeholders})`, regIds)
-    await pool.query(`DELETE FROM organization_registrations WHERE id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM registration_access_tokens WHERE registration_id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM registration_audit_log WHERE registration_id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM registration_documents WHERE registration_id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM registration_submissions WHERE registration_id IN (${placeholders})`, regIds)
+      await migConn.query(`DELETE FROM organization_registrations WHERE id IN (${placeholders})`, regIds)
+    }
+  } finally {
+    await migConn.end()
   }
 }
 

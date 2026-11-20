@@ -1,5 +1,8 @@
-import { useMemo, useState } from 'react'
-import { Plus, CheckCircle2, Package, Layers } from 'lucide-react'
+// PharmaTrace AI — Manufacturer Products & Batches Management
+// Connected to live authenticated MariaDB backend APIs (Milestone M7.1)
+
+import { useMemo, useState, useEffect, useCallback } from 'react'
+import { Plus, CheckCircle2, Package, Layers, RefreshCw, AlertCircle } from 'lucide-react'
 import {
   PageHeader,
   MetricCard,
@@ -11,59 +14,47 @@ import {
   Modal,
   Progress
 } from '../../../components/ui'
-import { useDemoData } from '../../../contexts/DemoData'
-import { useDemoSession } from '../../../contexts/DemoSession'
+import {
+  getProducts,
+  createProduct,
+  updateProductStatus
+} from '../../../services/manufacturerProductApi'
+import {
+  getBatches,
+  createBatch,
+  releaseBatch
+} from '../../../services/manufacturerBatchApi'
 import { getCurrentDateIso } from '../../../services/supplyChain'
 
-const FORMS = ['Tablet', 'Capsule', 'Syrup', 'Injection']
+const FORMS = ['Tablet', 'Capsule', 'Syrup', 'Injection', 'Suspension', 'Ointment']
 
 const EMPTY_PRODUCT = {
   name: '',
+  generic_name: '',
   strength: '',
-  form: 'Tablet',
-  packSize: '',
+  dosage_form: 'Tablet',
+  pack_size: '',
   gtin: ''
 }
 
 const createEmptyBatch = () => ({
   productId: '',
-  no: '',
+  batchNo: '',
   mfd: getCurrentDateIso(),
   exp: '',
-  quantity: '50'
+  quantity: '500'
 })
 
 export default function ProductsBatches() {
-  const {
-    products,
-    batches,
-    packages,
-    orgName,
-    productOf,
-    addProduct,
-    updateProduct,
-    addBatch,
-    releaseBatch
-  } = useDemoData()
-  const { orgId } = useDemoSession()
+  const [products, setProducts] = useState([])
+  const [batches, setBatches] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState('')
 
-  const orgProducts = useMemo(
-    () => products.filter(p => (p.orgId ?? 'm1') === orgId),
-    [products, orgId]
-  )
-  const activeOrgProducts = useMemo(
-    () => orgProducts.filter(p => (p.status ?? 'active') === 'active'),
-    [orgProducts]
-  )
-  const orgBatches = useMemo(
-    () => batches.filter(b => (b.orgId ?? productOf(b.productId)?.orgId ?? 'm1') === orgId),
-    [batches, productOf, orgId]
-  )
-
-  const today = getCurrentDateIso()
   const [tab, setTab] = useState('all')
   const [selProductId, setSelProductId] = useState(null)
   const [selBatchId, setSelBatchId] = useState(null)
+
   const [productModal, setProductModal] = useState(false)
   const [batchModal, setBatchModal] = useState(false)
   const [productForm, setProductForm] = useState(EMPTY_PRODUCT)
@@ -73,36 +64,57 @@ export default function ProductsBatches() {
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState('')
 
-  const serializedCountByBatch = useMemo(() => {
-    const map = {}
-    for (const p of packages) {
-      map[p.batchId] = (map[p.batchId] ?? 0) + 1
+  const [qaReleaseModal, setQaReleaseModal] = useState(false)
+  const [qaTargetBatch, setQaTargetBatch] = useState(null)
+  const [qaNotes, setQaNotes] = useState('')
+  const [qaErr, setQaErr] = useState('')
+  const [releasing, setReleasing] = useState(false)
+
+  const today = getCurrentDateIso()
+
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    setFetchError('')
+    try {
+      const [prodRes, batchRes] = await Promise.all([
+        getProducts({ limit: 100 }),
+        getBatches({ limit: 100 })
+      ])
+      setProducts(prodRes.products || [])
+      setBatches(batchRes.batches || [])
+    } catch (err) {
+      setFetchError(err.message || 'Failed to load products and batches from server.')
+    } finally {
+      setLoading(false)
     }
-    return map
-  }, [packages])
+  }, [])
+
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+
+  const activeProducts = useMemo(
+    () => products.filter(p => p.status === 'active'),
+    [products]
+  )
 
   const selectedProduct = useMemo(
-    () => orgProducts.find(p => p.id === selProductId) ?? null,
-    [orgProducts, selProductId]
+    () => products.find(p => p.id === selProductId) ?? null,
+    [products, selProductId]
   )
 
   const selectedBatch = useMemo(
-    () => orgBatches.find(b => b.id === selBatchId) ?? null,
-    [orgBatches, selBatchId]
+    () => batches.find(b => b.id === selBatchId) ?? null,
+    [batches, selBatchId]
   )
 
   const productBatches = useMemo(
-    () => (selectedProduct ? orgBatches.filter(b => b.productId === selectedProduct.id) : []),
-    [orgBatches, selectedProduct]
+    () => (selectedProduct ? batches.filter(b => b.product_id === selectedProduct.id) : []),
+    [batches, selectedProduct]
   )
 
-  const batchPackages = useMemo(
-    () => (selectedBatch ? packages.filter(p => p.batchId === selectedBatch.id) : []),
-    [packages, selectedBatch]
-  )
-
-  const pendingQaCount = orgBatches.filter(b => b.release !== 'Released').length
-  const releasedCount = orgBatches.filter(b => b.release === 'Released').length
+  const pendingQaCount = batches.filter(b => b.release_status === 'Pending QA').length
+  const releasedCount = batches.filter(b => b.release_status === 'Released').length
 
   function openProductModal() {
     setProductForm(EMPTY_PRODUCT)
@@ -113,7 +125,7 @@ export default function ProductsBatches() {
   function openBatchModal() {
     setBatchForm({
       ...createEmptyBatch(),
-      productId: activeOrgProducts[0]?.id ?? ''
+      productId: activeProducts[0]?.id ?? ''
     })
     setBatchErr('')
     setBatchModal(true)
@@ -122,35 +134,39 @@ export default function ProductsBatches() {
   async function handleRegisterProduct(e) {
     e.preventDefault()
     if (saving) return
-    const name = productForm.name.trim()
-    const strength = productForm.strength.trim()
-    const packSize = productForm.packSize.trim()
-    const gtin = productForm.gtin.trim().toUpperCase()
 
-    if (!name || !strength || !packSize || !gtin) {
-      setProductErr('All product fields are required.')
+    const name = productForm.name.trim()
+    const genericName = productForm.generic_name.trim()
+    const strength = productForm.strength.trim()
+    const packSize = productForm.pack_size.trim()
+    const gtin = productForm.gtin.trim()
+
+    if (!name || !genericName || !strength || !packSize) {
+      setProductErr('Product trade name, generic name, strength, and pack size are required.')
       return
     }
-    if (products.some(p => p.gtin.toUpperCase() === gtin)) {
-      setProductErr('A product with this GTIN already exists.')
+
+    if (gtin && !/^\d{8}$|^\d{12}$|^\d{13}$|^\d{14}$/.test(gtin)) {
+      setProductErr('GTIN must be 8, 12, 13, or 14 digits (or leave blank if unassigned).')
       return
     }
 
     setSaving(true)
+    setProductErr('')
     try {
-      const res = await addProduct({
+      const created = await createProduct({
         name,
+        generic_name: genericName,
         strength,
-        form: productForm.form,
-        packSize,
-        gtin
+        dosage_form: productForm.dosage_form,
+        pack_size: packSize,
+        gtin: gtin || null
       })
-      if (!res || res.ok === false) {
-        setProductErr(res?.error || 'Could not register product.')
-        return
-      }
       setProductModal(false)
-      setToast(`Registered product ${name} (${strength}).`)
+      setToast(`Registered product "${created.name}" (${created.strength}).`)
+      await loadData()
+    } catch (err) {
+      setProductErr(err.message || 'Could not register product.')
     } finally {
       setSaving(false)
     }
@@ -159,57 +175,45 @@ export default function ProductsBatches() {
   async function handleCreateBatch(e) {
     e.preventDefault()
     if (saving) return
-    const no = batchForm.no.trim().toUpperCase()
+
+    const batchNo = batchForm.batchNo.trim().toUpperCase()
     const quantity = Number(batchForm.quantity)
 
-    if (!batchForm.productId || !no || !batchForm.mfd || !batchForm.exp) {
-      setBatchErr('Please fill in product, batch number, manufactured date and expiry date.')
+    if (!batchForm.productId || !batchNo || !batchForm.mfd || !batchForm.exp) {
+      setBatchErr('Please fill in product, batch number, manufactured date, and expiry date.')
       return
     }
+
     if (!Number.isInteger(quantity) || quantity <= 0) {
-      setBatchErr('Quantity must be a positive whole number.')
+      setBatchErr('Quantity must be a positive whole number greater than zero.')
       return
     }
+
     if (batchForm.exp <= batchForm.mfd) {
-      setBatchErr('Expiry date must be after the manufactured date.')
+      setBatchErr('Expiry date must be strictly after the manufactured date.')
       return
     }
-    if (batches.some(b => b.no.toUpperCase() === no)) {
-      setBatchErr('A batch with this number already exists.')
+
+    if (batchForm.mfd > today) {
+      setBatchErr('Manufacturing date cannot be in the future.')
       return
     }
 
     setSaving(true)
+    setBatchErr('')
     try {
-      const res = await addBatch({
+      const created = await createBatch({
         productId: batchForm.productId,
-        no,
+        batchNo,
         mfd: batchForm.mfd,
         exp: batchForm.exp,
         quantity
       })
-      if (!res || res.ok === false) {
-        setBatchErr(res?.error || 'Could not create batch.')
-        return
-      }
       setBatchModal(false)
-      setToast(`Created batch ${no} (Pending QA).`)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function handleReleaseBatch(batch, e) {
-    e?.stopPropagation()
-    if (saving) return
-    setSaving(true)
-    try {
-      const res = await releaseBatch(batch.id)
-      if (!res || res.ok === false) {
-        setToast(res?.error || 'Could not release batch.')
-        return
-      }
-      setToast(`Batch ${batch.no} released for serialization.`)
+      setToast(`Created batch ${created.batch_no} (Pending QA).`)
+      await loadData()
+    } catch (err) {
+      setBatchErr(err.message || 'Could not create batch.')
     } finally {
       setSaving(false)
     }
@@ -217,25 +221,63 @@ export default function ProductsBatches() {
 
   async function handleToggleProductStatus(product) {
     if (saving) return
-    const nextStatus = product.status === 'active' ? 'inactive' : 'active'
+    const nextStatus = product.status === 'active' ? 'discontinued' : 'active'
     setSaving(true)
     try {
-      const res = await updateProduct(product.id, { status: nextStatus })
-      if (!res || res.ok === false) {
-        setToast(res?.error || 'Could not update product status.')
-        return
+      await updateProductStatus(product.id, nextStatus)
+      setToast(`Product ${product.name} marked as ${nextStatus}.`)
+      await loadData()
+      if (selProductId === product.id) {
+        setSelProductId(product.id)
       }
-      setToast(`Product ${product.name} marked ${nextStatus}.`)
+    } catch (err) {
+      setToast(err.message || 'Could not update product status.')
     } finally {
       setSaving(false)
     }
   }
 
+  function openQaReleaseModal(batch, e) {
+    e?.stopPropagation()
+    setQaTargetBatch(batch)
+    setQaNotes('Assay, potency, and sterility specifications verified compliant.')
+    setQaErr('')
+    setQaReleaseModal(true)
+  }
+
+  async function handleConfirmRelease(e) {
+    e.preventDefault()
+    if (releasing || !qaTargetBatch) return
+
+    setReleasing(true)
+    setQaErr('')
+    try {
+      await releaseBatch(qaTargetBatch.id, { notes: qaNotes.trim() })
+      setToast(`Batch ${qaTargetBatch.batch_no || qaTargetBatch.no} successfully approved for QA release.`)
+      setQaReleaseModal(false)
+      setQaTargetBatch(null)
+      await loadData()
+    } catch (err) {
+      setQaErr(err.message || 'Failed to approve batch QA release.')
+    } finally {
+      setReleasing(false)
+    }
+  }
+
   const tabs = [
     { id: 'all', label: 'All' },
-    { id: 'products', label: `Products (${orgProducts.length})` },
-    { id: 'batches', label: `Batches (${orgBatches.length})` }
+    { id: 'products', label: `Products (${products.length})` },
+    { id: 'batches', label: `Batches (${batches.length})` }
   ]
+
+  if (loading && products.length === 0 && batches.length === 0) {
+    return (
+      <div className="flex min-h-[400px] flex-col items-center justify-center gap-3">
+        <RefreshCw className="animate-spin text-clinical" size={32} />
+        <p className="text-sm font-semibold text-navy">Loading pharmaceutical registry from database...</p>
+      </div>
+    )
+  }
 
   return (
     <>
@@ -244,7 +286,7 @@ export default function ProductsBatches() {
         description="Register pharmaceutical products, create production batches, and manage QA release before serialization."
         actions={
           <>
-            <Button variant="secondary" onClick={openBatchModal} disabled={activeOrgProducts.length === 0}>
+            <Button variant="secondary" onClick={openBatchModal} disabled={activeProducts.length === 0}>
               <Layers size={15} /> Create batch
             </Button>
             <Button onClick={openProductModal}>
@@ -254,9 +296,25 @@ export default function ProductsBatches() {
         }
       />
 
+      {fetchError && (
+        <div className="mb-4 flex items-center justify-between rounded-md border border-quarantine-line bg-quarantine-soft p-3 text-xs text-quarantine">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={16} />
+            <span>{fetchError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={loadData}
+            className="flex items-center gap-1 font-semibold underline hover:no-underline"
+          >
+            <RefreshCw size={12} /> Retry
+          </button>
+        </div>
+      )}
+
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <MetricCard label="Products" value={orgProducts.length} hint={`${activeOrgProducts.length} active`} />
-        <MetricCard label="Total batches" value={orgBatches.length} />
+        <MetricCard label="Products" value={products.length} hint={`${activeProducts.length} active`} />
+        <MetricCard label="Total batches" value={batches.length} />
         <MetricCard label="Released" value={releasedCount} />
         <MetricCard label="Pending QA" value={pendingQaCount} />
       </div>
@@ -285,7 +343,7 @@ export default function ProductsBatches() {
               <h2 className="flex items-center gap-2 text-base font-bold text-navy">
                 <Package size={16} aria-hidden /> Registered products
               </h2>
-              <p className="text-xs text-muted">Click a product row to view its details and associated batches.</p>
+              <p className="text-xs text-muted">Click a product row to view its details, generic formulation, and associated batches.</p>
             </div>
             <Button variant="secondary" onClick={openProductModal}>
               <Plus size={14} /> Register product
@@ -293,16 +351,43 @@ export default function ProductsBatches() {
           </div>
 
           <DataTable
-            rows={orgProducts}
+            rows={products}
             onRowClick={r => setSelProductId(r.id)}
-            empty="No products registered yet."
+            empty="No pharmaceutical products registered yet. Click 'Register product' to get started."
             columns={[
-              { key: 'name', label: 'Product', render: r => <span className="font-semibold text-navy">{r.name}</span> },
+              {
+                key: 'name',
+                label: 'Product',
+                render: r => (
+                  <div>
+                    <span className="font-semibold text-navy">{r.name}</span>
+                    <div className="text-[11px] text-muted">{r.generic_name}</div>
+                  </div>
+                )
+              },
               { key: 'strength', label: 'Strength' },
-              { key: 'form', label: 'Form' },
-              { key: 'packSize', label: 'Pack size' },
-              { key: 'gtin', label: 'GTIN', render: r => <span className="id-text whitespace-nowrap">{r.gtin}</span> },
-              { key: 'status', label: 'Status', render: r => <StatusBadge status={r.status} /> }
+              { key: 'dosage_form', label: 'Form', render: r => r.dosage_form || r.form },
+              { key: 'pack_size', label: 'Pack size', render: r => r.pack_size || r.packSize },
+              {
+                key: 'gtin',
+                label: 'GTIN',
+                render: r => <span className="id-text whitespace-nowrap">{r.gtin || '—'}</span>
+              },
+              {
+                key: 'status',
+                label: 'Status',
+                render: r => (
+                  <span
+                    className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${
+                      r.status === 'active'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {r.status === 'active' ? 'Active' : 'Discontinued'}
+                  </span>
+                )
+              }
             ]}
           />
         </section>
@@ -317,26 +402,36 @@ export default function ProductsBatches() {
               <h2 className="flex items-center gap-2 text-base font-bold text-navy">
                 <Layers size={16} aria-hidden /> Production batches
               </h2>
-              <p className="text-xs text-muted">Pending QA batches must be released before serial identifiers can be generated.</p>
+              <p className="text-xs text-muted">Pending QA batches require QA clearance before serial identifiers can be generated.</p>
             </div>
-            <Button variant="secondary" onClick={openBatchModal} disabled={activeOrgProducts.length === 0}>
+            <Button variant="secondary" onClick={openBatchModal} disabled={activeProducts.length === 0}>
               <Plus size={14} /> Create batch
             </Button>
           </div>
 
           <DataTable
-            rows={orgBatches}
+            rows={batches}
             onRowClick={r => setSelBatchId(r.id)}
-            empty="No batches created yet."
+            empty="No production batches created yet. Click 'Create batch' to record your first batch."
             columns={[
-              { key: 'no', label: 'Batch no', render: r => <span className="id-text whitespace-nowrap font-semibold text-navy">{r.no}</span> },
               {
-                key: 'productId',
+                key: 'batch_no',
+                label: 'Batch no',
+                render: r => (
+                  <span className="id-text whitespace-nowrap font-semibold text-navy">
+                    {r.batch_no || r.no}
+                  </span>
+                )
+              },
+              {
+                key: 'product_name',
                 label: 'Product',
-                render: r => {
-                  const prod = productOf(r.productId)
-                  return prod ? `${prod.name} ${prod.strength}` : '—'
-                }
+                render: r => (
+                  <div>
+                    <span className="font-semibold text-navy">{r.product_name}</span>
+                    <span className="ml-1 text-xs text-muted">{r.strength}</span>
+                  </div>
+                )
               },
               { key: 'mfd', label: 'MFD', render: r => <span className="id-text whitespace-nowrap">{r.mfd}</span> },
               {
@@ -354,25 +449,31 @@ export default function ProductsBatches() {
                 label: 'Serialized',
                 render: r => (
                   <span className="id-text">
-                    {serializedCountByBatch[r.id] ?? 0} / {r.quantity}
+                    {r.serialized_count ?? 0} / {r.quantity}
                   </span>
                 )
               },
-              { key: 'release', label: 'Release status', render: r => <StatusBadge status={r.release} /> },
+              {
+                key: 'release_status',
+                label: 'Release status',
+                render: r => <StatusBadge status={r.release_status || r.release} />
+              },
               {
                 key: 'actions',
                 label: 'Actions',
                 render: r =>
-                  r.release !== 'Released' ? (
+                  (r.release_status || r.release) !== 'Released' ? (
                     <Button
-                      variant="success"
+                      variant="secondary"
                       className="px-2.5 py-1 text-xs"
-                      onClick={e => handleReleaseBatch(r, e)}
+                      onClick={e => openQaReleaseModal(r, e)}
                     >
-                      <CheckCircle2 size={13} /> Release
+                      <CheckCircle2 size={13} className="text-amber-600" /> Release QA
                     </Button>
                   ) : (
-                    <span className="text-xs text-muted">—</span>
+                    <span className="flex items-center gap-1 text-xs font-semibold text-emerald-600">
+                      <CheckCircle2 size={13} /> Released
+                    </span>
                   )
               }
             ]}
@@ -383,7 +484,7 @@ export default function ProductsBatches() {
       {/* Register Product Modal */}
       <Modal
         open={productModal}
-        title="Register product"
+        title="Register pharmaceutical product"
         onClose={() => setProductModal(false)}
         actions={
           <>
@@ -398,29 +499,43 @@ export default function ProductsBatches() {
       >
         <form id="register-product-form" onSubmit={handleRegisterProduct} className="space-y-3">
           <label className="block text-sm font-semibold">
-            Product name
+            Product trade name <span className="text-quarantine">*</span>
             <input
               value={productForm.name}
               onChange={e => setProductForm(f => ({ ...f, name: e.target.value }))}
-              placeholder="e.g. Metformin"
+              placeholder="e.g. Napa Extra"
               className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
+              required
             />
           </label>
+
+          <label className="block text-sm font-semibold">
+            Generic name <span className="text-quarantine">*</span>
+            <input
+              value={productForm.generic_name}
+              onChange={e => setProductForm(f => ({ ...f, generic_name: e.target.value }))}
+              placeholder="e.g. Paracetamol + Caffeine"
+              className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
+              required
+            />
+          </label>
+
           <div className="grid grid-cols-2 gap-3">
             <label className="block text-sm font-semibold">
-              Strength
+              Strength <span className="text-quarantine">*</span>
               <input
                 value={productForm.strength}
                 onChange={e => setProductForm(f => ({ ...f, strength: e.target.value }))}
-                placeholder="e.g. 500 mg"
+                placeholder="e.g. 500 mg + 65 mg"
                 className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
+                required
               />
             </label>
             <label className="block text-sm font-semibold">
-              Dosage form
+              Dosage form <span className="text-quarantine">*</span>
               <select
-                value={productForm.form}
-                onChange={e => setProductForm(f => ({ ...f, form: e.target.value }))}
+                value={productForm.dosage_form}
+                onChange={e => setProductForm(f => ({ ...f, dosage_form: e.target.value }))}
                 className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
               >
                 {FORMS.map(form => (
@@ -431,26 +546,30 @@ export default function ProductsBatches() {
               </select>
             </label>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <label className="block text-sm font-semibold">
-              Pack size
+              Pack size <span className="text-quarantine">*</span>
               <input
-                value={productForm.packSize}
-                onChange={e => setProductForm(f => ({ ...f, packSize: e.target.value }))}
+                value={productForm.pack_size}
+                onChange={e => setProductForm(f => ({ ...f, pack_size: e.target.value }))}
                 placeholder="e.g. 10 x 10"
                 className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
+                required
               />
             </label>
             <label className="block text-sm font-semibold">
-              GTIN
+              GTIN (Optional)
               <input
                 value={productForm.gtin}
                 onChange={e => setProductForm(f => ({ ...f, gtin: e.target.value }))}
-                placeholder="DEMO-GTIN-0003"
+                placeholder="e.g. 06291041500213"
                 className="id-text mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
               />
+              <span className="mt-0.5 block text-[10px] text-muted">8, 12, 13, or 14 digits with GS1 check digit</span>
             </label>
           </div>
+
           {productErr && (
             <p role="alert" className="text-sm text-quarantine">
               {productErr}
@@ -477,60 +596,69 @@ export default function ProductsBatches() {
       >
         <form id="create-batch-form" onSubmit={handleCreateBatch} className="space-y-3">
           <label className="block text-sm font-semibold">
-            Product
+            Product <span className="text-quarantine">*</span>
             <select
               value={batchForm.productId}
               onChange={e => setBatchForm(f => ({ ...f, productId: e.target.value }))}
               className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
             >
-              {activeOrgProducts.map(p => (
+              {activeProducts.map(p => (
                 <option key={p.id} value={p.id}>
-                  {p.name} · {p.strength} ({p.form})
+                  {p.name} · {p.strength} ({p.dosage_form || p.form})
                 </option>
               ))}
             </select>
           </label>
+
           <div className="grid grid-cols-2 gap-3">
             <label className="block text-sm font-semibold">
-              Batch number
+              Batch number <span className="text-quarantine">*</span>
               <input
-                value={batchForm.no}
-                onChange={e => setBatchForm(f => ({ ...f, no: e.target.value }))}
-                placeholder="e.g. PCM-2611"
-                className="id-text mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
+                value={batchForm.batchNo}
+                onChange={e => setBatchForm(f => ({ ...f, batchNo: e.target.value }))}
+                placeholder="e.g. BATCH-2026-A1"
+                className="id-text mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal uppercase"
+                required
               />
             </label>
             <label className="block text-sm font-semibold">
-              Batch quantity
+              Batch quantity <span className="text-quarantine">*</span>
               <input
                 type="number"
                 min="1"
                 value={batchForm.quantity}
                 onChange={e => setBatchForm(f => ({ ...f, quantity: e.target.value }))}
                 className="id-text mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
+                required
               />
             </label>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <label className="block text-sm font-semibold">
-              Manufactured date
+              Manufactured date <span className="text-quarantine">*</span>
               <input
                 type="date"
+                max={today}
                 value={batchForm.mfd}
                 onChange={e => setBatchForm(f => ({ ...f, mfd: e.target.value }))}
                 className="id-text mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
+                required
               />
             </label>
             <label className="block text-sm font-semibold">
-              Expiry date
+              Expiry date <span className="text-quarantine">*</span>
               <input
                 type="date"
+                min={batchForm.mfd || today}
                 value={batchForm.exp}
                 onChange={e => setBatchForm(f => ({ ...f, exp: e.target.value }))}
                 className="id-text mt-1 w-full rounded-md border border-line px-3 py-2 text-sm font-normal"
+                required
               />
             </label>
           </div>
+
           {batchErr && (
             <p role="alert" className="text-sm text-quarantine">
               {batchErr}
@@ -553,34 +681,47 @@ export default function ProductsBatches() {
                 <dd className="font-semibold">{selectedProduct.name}</dd>
               </div>
               <div className="flex justify-between">
+                <dt className="text-muted">Generic name</dt>
+                <dd className="font-semibold text-clinical">{selectedProduct.generic_name}</dd>
+              </div>
+              <div className="flex justify-between">
                 <dt className="text-muted">Strength</dt>
                 <dd className="font-semibold">{selectedProduct.strength}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted">Form</dt>
-                <dd className="font-semibold">{selectedProduct.form}</dd>
+                <dd className="font-semibold">{selectedProduct.dosage_form || selectedProduct.form}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted">Pack size</dt>
-                <dd className="font-semibold">{selectedProduct.packSize}</dd>
+                <dd className="font-semibold">{selectedProduct.pack_size || selectedProduct.packSize}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted">GTIN</dt>
-                <dd className="id-text font-semibold">{selectedProduct.gtin}</dd>
+                <dd className="id-text font-semibold">{selectedProduct.gtin || '—'}</dd>
               </div>
               <div className="flex items-center justify-between">
                 <dt className="text-muted">Status</dt>
-                <StatusBadge status={selectedProduct.status} />
+                <span
+                  className={`inline-block rounded px-2 py-0.5 text-xs font-semibold ${
+                    selectedProduct.status === 'active'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {selectedProduct.status === 'active' ? 'Active' : 'Discontinued'}
+                </span>
               </div>
             </dl>
 
             <div className="mb-6 flex justify-end">
               <Button
-                variant="secondary"
+                variant={selectedProduct.status === 'active' ? 'secondary' : 'primary'}
                 className="text-xs"
+                disabled={saving}
                 onClick={() => handleToggleProductStatus(selectedProduct)}
               >
-                {selectedProduct.status === 'active' ? 'Mark inactive' : 'Mark active'}
+                {selectedProduct.status === 'active' ? 'Discontinue product' : 'Reactivate product'}
               </Button>
             </div>
 
@@ -589,21 +730,21 @@ export default function ProductsBatches() {
             </h3>
             {productBatches.length === 0 ? (
               <p className="rounded-md border border-dashed border-line p-4 text-center text-xs text-muted">
-                No batches recorded for this product yet.
+                No production batches recorded for this product yet.
               </p>
             ) : (
               <div className="space-y-3">
                 {productBatches.map(b => (
                   <div key={b.id} className="rounded-md border border-line bg-surface p-3">
                     <div className="mb-1 flex items-center justify-between">
-                      <span className="id-text text-sm font-semibold text-navy">{b.no}</span>
-                      <StatusBadge status={b.release} />
+                      <span className="id-text text-sm font-semibold text-navy">{b.batch_no || b.no}</span>
+                      <StatusBadge status={b.release_status || b.release} />
                     </div>
                     <div className="mb-2 flex justify-between text-xs text-muted">
                       <span>MFD {b.mfd}</span>
                       <span>EXP {b.exp}</span>
                     </div>
-                    <Progress value={serializedCountByBatch[b.id] ?? 0} max={b.quantity} />
+                    <Progress value={b.serialized_count ?? 0} max={b.quantity} />
                   </div>
                 ))}
               </div>
@@ -616,24 +757,28 @@ export default function ProductsBatches() {
       <Drawer
         open={!!selectedBatch}
         onClose={() => setSelBatchId(null)}
-        title={selectedBatch ? `Batch ${selectedBatch.no}` : 'Batch details'}
+        title={selectedBatch ? `Batch ${selectedBatch.batch_no || selectedBatch.no}` : 'Batch details'}
       >
         {selectedBatch && (
           <>
             <dl className="mb-5 space-y-2 text-sm">
               <div className="flex justify-between">
                 <dt className="text-muted">Batch no</dt>
-                <dd className="id-text font-semibold">{selectedBatch.no}</dd>
+                <dd className="id-text font-semibold">{selectedBatch.batch_no || selectedBatch.no}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted">Product</dt>
                 <dd className="font-semibold">
-                  {productOf(selectedBatch.productId)?.name} {productOf(selectedBatch.productId)?.strength}
+                  {selectedBatch.product_name} {selectedBatch.strength}
                 </dd>
               </div>
               <div className="flex justify-between">
+                <dt className="text-muted">Generic name</dt>
+                <dd className="font-semibold text-clinical">{selectedBatch.generic_name}</dd>
+              </div>
+              <div className="flex justify-between">
                 <dt className="text-muted">GTIN</dt>
-                <dd className="id-text font-semibold">{productOf(selectedBatch.productId)?.gtin ?? '—'}</dd>
+                <dd className="id-text font-semibold">{selectedBatch.gtin || '—'}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted">Manufactured</dt>
@@ -655,7 +800,7 @@ export default function ProductsBatches() {
               </div>
               <div className="flex items-center justify-between">
                 <dt className="text-muted">Release status</dt>
-                <StatusBadge status={selectedBatch.release} />
+                <StatusBadge status={selectedBatch.release_status || selectedBatch.release} />
               </div>
             </dl>
 
@@ -663,44 +808,125 @@ export default function ProductsBatches() {
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                 Serialization progress
               </div>
-              <Progress value={batchPackages.length} max={selectedBatch.quantity} />
+              <Progress value={selectedBatch.serialized_count ?? 0} max={selectedBatch.quantity} />
+              <div className="mt-1 text-right text-xs text-muted">
+                {selectedBatch.serialized_count ?? 0} of {selectedBatch.quantity} serialized
+              </div>
             </div>
 
-            {selectedBatch.release !== 'Released' && (
-              <div className="mb-6">
-                <Button
-                  variant="success"
-                  className="w-full"
-                  onClick={() => handleReleaseBatch(selectedBatch)}
-                >
-                  <CheckCircle2 size={15} /> Release batch for serialization
-                </Button>
-              </div>
-            )}
-
-            <h3 className="mb-2 text-sm font-bold text-navy">
-              Serialized packages ({batchPackages.length})
-            </h3>
-            {batchPackages.length === 0 ? (
-              <p className="rounded-md border border-dashed border-line p-4 text-center text-xs text-muted">
-                No packages serialized for this batch yet.
-              </p>
-            ) : (
-              <div className="max-h-64 divide-y divide-line overflow-y-auto rounded-md border border-line">
-                {batchPackages.map(pkg => (
-                  <div key={pkg.serial} className="flex items-center justify-between px-3 py-2 text-xs">
-                    <div>
-                      <div className="id-text font-semibold text-navy">{pkg.serial}</div>
-                      <div className="text-muted">{orgName(pkg.custodian)}</div>
-                    </div>
-                    <StatusBadge status={pkg.status} />
+            {(selectedBatch.release_status || selectedBatch.release) !== 'Released' ? (
+              <div className="mb-6 rounded-md border border-amber-line bg-amber-soft p-3 text-xs text-amber-ink">
+                <div className="flex flex-col gap-2">
+                  <div>
+                    <p className="font-semibold">Pending QA Release</p>
+                    <p className="mt-0.5">
+                      Quality control inspection and regulatory sign-off required prior to package serialization.
+                    </p>
                   </div>
-                ))}
+                  <Button
+                    variant="primary"
+                    className="self-start px-3 py-1.5 text-xs"
+                    onClick={e => openQaReleaseModal(selectedBatch, e)}
+                  >
+                    <CheckCircle2 size={13} className="mr-1" /> Approve QA Release
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="mb-6 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+                <p className="flex items-center gap-1.5 font-semibold">
+                  <CheckCircle2 size={14} className="text-emerald-600" /> QA Cleared & Released
+                </p>
+                <p className="mt-0.5">
+                  This batch has received QA sign-off and is authorized for package serialization.
+                </p>
               </div>
             )}
           </>
         )}
       </Drawer>
+
+      {/* QA Release Sign-off Modal */}
+      <Modal
+        open={qaReleaseModal}
+        title="Approve batch QA release"
+        onClose={() => {
+          if (!releasing) {
+            setQaReleaseModal(false)
+            setQaTargetBatch(null)
+          }
+        }}
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              type="button"
+              disabled={releasing}
+              onClick={() => {
+                setQaReleaseModal(false)
+                setQaTargetBatch(null)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="qa-release-form"
+              disabled={releasing || (qaTargetBatch && qaTargetBatch.exp < today)}
+            >
+              {releasing ? 'Releasing...' : 'Sign-off & Release Batch'}
+            </Button>
+          </>
+        }
+      >
+        {qaTargetBatch && (
+          <form id="qa-release-form" onSubmit={handleConfirmRelease} className="space-y-3">
+            <div className="rounded-md border border-line bg-surface p-3 text-sm">
+              <div className="flex justify-between font-semibold text-navy">
+                <span>Batch: {qaTargetBatch.batch_no || qaTargetBatch.no}</span>
+                <StatusBadge status={qaTargetBatch.release_status || qaTargetBatch.release} />
+              </div>
+              <div className="mt-1 text-xs text-muted">
+                Product: {qaTargetBatch.product_name} {qaTargetBatch.strength}
+              </div>
+              <div className="mt-1 flex justify-between text-xs text-muted">
+                <span>MFD: {qaTargetBatch.mfd}</span>
+                <span className={qaTargetBatch.exp < today ? 'font-semibold text-quarantine' : ''}>
+                  EXP: {qaTargetBatch.exp}
+                </span>
+              </div>
+            </div>
+
+            {qaTargetBatch.exp < today && (
+              <div className="rounded-md border border-quarantine-line bg-quarantine-soft p-3 text-xs text-quarantine">
+                Cannot release an expired batch. Please quarantine or reject this batch.
+              </div>
+            )}
+
+            <p className="text-xs text-muted">
+              Approving QA release authorizes this batch for serialization and downstream distribution.
+              Ensure all physical chemical assays, analytical certificates, and sterility testing comply with DGDA regulations.
+            </p>
+
+            <label className="block text-sm font-semibold">
+              QA Sign-off Notes / Inspection Reference
+              <textarea
+                value={qaNotes}
+                onChange={e => setQaNotes(e.target.value)}
+                rows={3}
+                placeholder="e.g. Analytical release Certificate #QC-2026-094 approved. Assay: 99.8%."
+                className="mt-1 w-full rounded-md border border-line px-3 py-2 text-xs font-normal"
+              />
+            </label>
+
+            {qaErr && (
+              <p role="alert" className="text-xs text-quarantine">
+                {qaErr}
+              </p>
+            )}
+          </form>
+        )}
+      </Modal>
 
       {toast && <Toast msg={toast} onDone={() => setToast('')} />}
     </>

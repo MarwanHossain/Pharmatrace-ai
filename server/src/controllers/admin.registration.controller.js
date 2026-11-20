@@ -119,6 +119,69 @@ export async function downloadDocument(req, res) {
   }
 }
 
+const PREVIEWABLE_MIME_TYPES = Object.freeze([
+  'application/pdf',
+  'image/jpeg',
+  'image/png'
+])
+
+/**
+ * Securely streams an uploaded verification document for inline preview.
+ * GET /api/v1/admin/registrations/:id/documents/:docId/preview
+ */
+export async function previewDocument(req, res) {
+  try {
+    const { id, docId } = req.params
+
+    const doc = await adminService.getRegistrationDocument(id, docId)
+
+    if (!PREVIEWABLE_MIME_TYPES.includes(doc.mimeType)) {
+      return res.status(415).json({
+        success: false,
+        error: {
+          code: 'UNSUPPORTED_PREVIEW_FORMAT',
+          message: `Inline preview is not supported for ${doc.mimeType}. Please download the document to view it.`
+        }
+      })
+    }
+
+    res.setHeader('Content-Type', doc.mimeType)
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${encodeURIComponent(doc.originalFilename)}"`
+    )
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate')
+    res.setHeader('Pragma', 'no-cache')
+
+    return res.sendFile(doc.resolvedPath)
+  } catch (error) {
+    const statusCode = error.statusCode || 500
+    if (statusCode < 500) {
+      logger.warn('Document preview rejected', {
+        id: req.params.id,
+        docId: req.params.docId,
+        code: error.code,
+        message: error.message
+      })
+    } else {
+      logger.error('Document preview system error', {
+        id: req.params.id,
+        docId: req.params.docId,
+        error: error.message
+      })
+    }
+
+    return res.status(statusCode).json({
+      success: false,
+      error: {
+        code: error.code || 'PREVIEW_FAILED',
+        message: error.message || 'Failed to preview document.'
+      }
+    })
+  }
+}
+
 /**
  * Transitions registration status from SUBMITTED to UNDER_REVIEW.
  * POST /api/v1/admin/registrations/:id/review

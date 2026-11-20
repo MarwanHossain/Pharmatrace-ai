@@ -1,6 +1,7 @@
 import QrCodeSvg from './QrCodeSvg'
+import DataMatrixSvg from './DataMatrixSvg'
 
-export default function PackageLabelCard({ metadata, qrSize = 128, compact = false }) {
+export default function PackageLabelCard({ metadata, qrSize = 100, compact = false }) {
   if (!metadata?.serial) return null
 
   const titleLine = [metadata.productName, metadata.strength].filter(Boolean).join(' ')
@@ -12,20 +13,39 @@ export default function PackageLabelCard({ metadata, qrSize = 128, compact = fal
     .filter(Boolean)
     .join(' · ')
 
+  const codeSize = compact ? 88 : qrSize
+
   return (
     <article
-      className={`pt-label-card flex items-center gap-3 rounded-md border border-line bg-white ${
+      className={`pt-label-card flex flex-col sm:flex-row items-start sm:items-center gap-3 rounded-md border border-line bg-white ${
         compact ? 'p-2.5' : 'p-3.5'
       }`}
       data-label-serial={metadata.serial}
     >
-      <div className="shrink-0 rounded border border-line bg-white p-0.5">
-        <QrCodeSvg serial={metadata.serial} size={qrSize} />
+      <div className="flex items-center gap-2 shrink-0 self-center sm:self-auto">
+        <div className="rounded border border-line bg-white p-1 text-center">
+          <DataMatrixSvg
+            gtin={metadata.gtin}
+            serial={metadata.serial}
+            exp={metadata.exp}
+            batchNo={metadata.batchNo}
+            size={codeSize}
+          />
+          <div className="text-[8px] font-semibold uppercase tracking-wider text-muted mt-0.5">
+            GS1 DataMatrix
+          </div>
+        </div>
+        <div className="rounded border border-line bg-white p-1 text-center">
+          <QrCodeSvg serial={metadata.serial} size={codeSize} />
+          <div className="text-[8px] font-semibold uppercase tracking-wider text-muted mt-0.5">
+            PharmaTrace QR
+          </div>
+        </div>
       </div>
 
       <div className="min-w-0 flex-1">
         <div className="text-[10px] font-bold uppercase tracking-wider text-clinical">
-          PharmaTrace AI
+          PharmaTrace AI · Serialization
         </div>
         {titleLine && (
           <div className="truncate text-sm font-bold text-navy">{titleLine}</div>
@@ -41,6 +61,12 @@ export default function PackageLabelCard({ metadata, qrSize = 128, compact = fal
           )}
           {dateLine && (
             <div className="id-text text-[11px] text-ink">{dateLine}</div>
+          )}
+          {metadata.gtin && (
+            <div className="flex flex-wrap gap-x-1">
+              <dt className="text-muted">GTIN-14:</dt>
+              <dd className="id-text">{metadata.gtin}</dd>
+            </div>
           )}
           {metadata.manufacturerName && (
             <div className="truncate text-[11px] text-muted">
@@ -59,7 +85,7 @@ export default function PackageLabelCard({ metadata, qrSize = 128, compact = fal
         </div>
 
         <p className="mt-1.5 text-[10px] leading-tight text-muted">
-          Scan QR to check recorded journey. QR alone does not prove authenticity.
+          Scan QR to check recorded supply-chain journey. A valid QR code or DataMatrix does not constitute proof of physical product authenticity.
         </p>
       </div>
     </article>

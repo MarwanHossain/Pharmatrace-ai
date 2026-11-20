@@ -1,15 +1,16 @@
-import { useMemo, useState } from 'react'
-import { AlertTriangle, Search, ShieldAlert } from 'lucide-react'
+// PharmaTrace AI — Pharmacy Medicine Inventory Management
+// Connected to live authenticated MariaDB backend APIs (Milestone M7.3)
+
+import { useState, useMemo, useEffect, useCallback } from 'react'
+import { AlertTriangle, Search, ShieldAlert, RefreshCw, AlertCircle } from 'lucide-react'
 import {
   PageHeader,
   DataTable,
   StatusBadge,
   Drawer,
-  Timeline
+  Button
 } from '../../../components/ui'
-import { useDemoData } from '../../../contexts/DemoData'
-import { useDemoSession } from '../../../contexts/DemoSession'
-import { verifySerial } from '../../../services/verification'
+import { getCustodyInventory } from '../../../services/shipmentApi'
 import { getCurrentDateIso } from '../../../services/supplyChain'
 
 const NEAR_EXPIRY_DAYS = 90
@@ -20,66 +21,65 @@ const daysBetween = (from, to) =>
 const FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'ready', label: 'Ready to dispense' },
-  { id: 'dispensed', label: 'Dispensed' },
+  { id: 'quarantined', label: 'Quarantined' },
   { id: 'alerts', label: 'Alerts' }
 ]
 
 export default function Inventory() {
-  const { organizations, packages, batches, shipments, orgName, productOf } = useDemoData()
-  const { orgId, organization } = useDemoSession()
-  const currentOrgName = organization?.name ?? orgName(orgId)
-
+  const [inventory, setInventory] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState('')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
   const [selectedSerial, setSelectedSerial] = useState(null)
   const today = getCurrentDateIso()
 
-  const inventoryRows = useMemo(() => {
-    return packages
-      .filter(p => p.custodian === orgId)
-      .map(pkg => {
-        const batch = batches.find(b => b.id === pkg.batchId) ?? null
-        const product = batch ? productOf(batch.productId) : null
-        const verification = verifySerial(pkg.serial, { packages, batches, shipments, organizations, today })
-        const isExpired = Boolean(batch && batch.exp < today)
-        const daysToExp = batch ? daysBetween(today, batch.exp) : null
-        const isNearExpiry = Boolean(batch && !isExpired && daysToExp !== null && daysToExp <= NEAR_EXPIRY_DAYS)
-        const isIncomplete = verification.supplyChainStatus === 'incomplete'
-        const isQuarantined = pkg.status === 'quarantined'
-        const isDiscrepancy = pkg.status === 'discrepancy' || pkg.status === 'rejected' || pkg.status === 'missing'
-        const hasRepeatedScans = verification.unusualActivity
-        const hasAlert = isExpired || isNearExpiry || isIncomplete || isQuarantined || isDiscrepancy
-
-        return {
-          ...pkg,
-          batch,
-          product,
-          verification,
-          isExpired,
-          daysToExp,
-          isNearExpiry,
-          isIncomplete,
-          isDiscrepancy,
-          hasRepeatedScans,
-          hasAlert
-        }
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    setFetchError('')
+    try {
+      const res = await getCustodyInventory({
+        search: query || undefined,
+        limit: 100
       })
-  }, [packages, batches, shipments, organizations, orgId, productOf, today])
+      setInventory(res.inventory || [])
+    } catch (e) {
+      setFetchError(e.message || 'Failed to load medicine inventory.')
+    } finally {
+      setLoading(false)
+    }
+  }, [query])
+
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+
+  const inventoryRows = useMemo(() => {
+    return inventory.map(pkg => {
+      const isExpired = Boolean(pkg.exp && pkg.exp < today)
+      const daysToExp = pkg.exp ? daysBetween(today, pkg.exp) : null
+      const isNearExpiry = Boolean(pkg.exp && !isExpired && daysToExp !== null && daysToExp <= NEAR_EXPIRY_DAYS)
+      const isQuarantined = pkg.status === 'quarantined'
+      const hasAlert = isExpired || isNearExpiry || isQuarantined
+
+      return {
+        ...pkg,
+        isExpired,
+        daysToExp,
+        isNearExpiry,
+        hasAlert
+      }
+    })
+  }, [inventory, today])
 
   const filteredRows = useMemo(() => {
-    const q = query.trim().toLowerCase()
     return inventoryRows.filter(row => {
       if (filter === 'ready' && row.status !== 'accepted') return false
-      if (filter === 'dispensed' && row.status !== 'dispensed') return false
+      if (filter === 'quarantined' && row.status !== 'quarantined') return false
       if (filter === 'alerts' && !row.hasAlert) return false
-
-      if (!q) return true
-      const serialMatch = row.serial.toLowerCase().includes(q)
-      const batchMatch = row.batch?.no?.toLowerCase().includes(q)
-      const productMatch = row.product?.name?.toLowerCase().includes(q)
-      return serialMatch || batchMatch || productMatch
+      return true
     })
-  }, [inventoryRows, filter, query])
+  }, [inventoryRows, filter])
 
   const selectedPkg = useMemo(
     () => inventoryRows.find(r => r.serial === selectedSerial) ?? null,
@@ -90,8 +90,21 @@ export default function Inventory() {
     <>
       <PageHeader
         title="Medicine Inventory"
-        description={`Serialized packages held by ${currentOrgName}, with expiry monitoring and chain-of-custody verification.`}
+        description="Serialized pharmaceutical packages held in physical custody, with expiry monitoring and custody verification."
+        actions={
+          <Button variant="secondary" onClick={loadData} disabled={loading}>
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </Button>
+        }
       />
+
+      {fetchError && (
+        <div role="alert" className="mb-4 flex items-center gap-2 rounded-md border border-quarantine-line bg-quarantine-soft p-3 text-sm text-quarantine">
+          <AlertCircle size={16} />
+          <span>{fetchError}</span>
+        </div>
+      )}
 
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative flex-1 sm:max-w-sm">
@@ -117,8 +130,8 @@ export default function Inventory() {
                 ? inventoryRows.length
                 : tab.id === 'ready'
                   ? inventoryRows.filter(r => r.status === 'accepted').length
-                  : tab.id === 'dispensed'
-                    ? inventoryRows.filter(r => r.status === 'dispensed').length
+                  : tab.id === 'quarantined'
+                    ? inventoryRows.filter(r => r.status === 'quarantined').length
                     : inventoryRows.filter(r => r.hasAlert).length
             const active = filter === tab.id
             return (
@@ -156,19 +169,19 @@ export default function Inventory() {
           {
             key: 'medicine',
             label: 'Medicine',
-            render: r => (r.product ? `${r.product.name} ${r.product.strength}` : 'Unknown medicine')
+            render: r => (r.product_name ? `${r.product_name} ${r.strength || ''}` : 'Unknown medicine')
           },
           {
             key: 'batch',
             label: 'Batch',
-            render: r => <span className="id-text">{r.batch?.no ?? '—'}</span>
+            render: r => <span className="id-text">{r.batch_no ?? '—'}</span>
           },
           {
             key: 'expiry',
             label: 'Expiry',
             render: r => (
               <div className="flex flex-wrap items-center gap-2">
-                <span className="id-text">{r.batch?.exp ?? '—'}</span>
+                <span className="id-text">{r.exp ?? '—'}</span>
                 {r.isExpired && (
                   <span className="inline-flex items-center rounded border border-quarantine-line bg-quarantine-soft px-2 py-0.5 text-xs font-semibold text-quarantine">
                     Expired
@@ -180,13 +193,6 @@ export default function Inventory() {
                   </span>
                 )}
               </div>
-            )
-          },
-          {
-            key: 'traceability',
-            label: 'Traceability',
-            render: r => (
-              <StatusBadge status={r.isIncomplete ? 'incomplete' : 'verified'} />
             )
           },
           {
@@ -209,8 +215,6 @@ export default function Inventory() {
           <div className="space-y-5">
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge status={selectedPkg.status} />
-              <StatusBadge status={selectedPkg.isIncomplete ? 'incomplete' : 'verified'} />
-              {selectedPkg.hasRepeatedScans && <StatusBadge status="unusual" />}
             </div>
 
             {selectedPkg.isExpired && (
@@ -219,7 +223,7 @@ export default function Inventory() {
                 <div>
                   <div className="font-semibold">Expired package</div>
                   <div>
-                    Batch {selectedPkg.batch?.no} expired on {selectedPkg.batch?.exp}. Quarantine and do not dispense.
+                    Batch {selectedPkg.batch_no} expired on {selectedPkg.exp}. Quarantine and do not dispense.
                   </div>
                 </div>
               </div>
@@ -231,19 +235,7 @@ export default function Inventory() {
                 <div>
                   <div className="font-semibold">Expiring soon ({selectedPkg.daysToExp} days)</div>
                   <div>
-                    This batch expires on {selectedPkg.batch?.exp} (within 90 days of {today}).
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {selectedPkg.isIncomplete && (
-              <div className="flex items-start gap-2 rounded-md border border-amber-line bg-amber-soft p-3 text-xs text-amber-ink">
-                <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-                <div>
-                  <div className="font-semibold">Incomplete traceability</div>
-                  <div>
-                    Chain of custody is missing required dispatch or intermediate transfer events. Hold from dispensing until investigated.
+                    This batch expires on {selectedPkg.exp} (within 90 days of {today}).
                   </div>
                 </div>
               </div>
@@ -252,39 +244,23 @@ export default function Inventory() {
             <dl className="grid grid-cols-2 gap-y-2 rounded-lg border border-line bg-surface p-3 text-sm">
               <dt className="text-muted">Medicine</dt>
               <dd className="font-semibold text-navy">
-                {selectedPkg.product
-                  ? `${selectedPkg.product.name} ${selectedPkg.product.strength}`
+                {selectedPkg.product_name
+                  ? `${selectedPkg.product_name} ${selectedPkg.strength || ''}`
                   : 'Unknown medicine'}
               </dd>
-              <dt className="text-muted">Dosage / Pack</dt>
+              <dt className="text-muted">Dosage / Form</dt>
               <dd>
-                {selectedPkg.product
-                  ? `${selectedPkg.product.form} · ${selectedPkg.product.packSize}`
-                  : '—'}
+                {selectedPkg.dosage_form || '—'}
               </dd>
               <dt className="text-muted">Batch</dt>
-              <dd className="id-text font-semibold">{selectedPkg.batch?.no ?? '—'}</dd>
+              <dd className="id-text font-semibold">{selectedPkg.batch_no ?? '—'}</dd>
               <dt className="text-muted">Manufactured</dt>
-              <dd className="id-text">{selectedPkg.batch?.mfd ?? '—'}</dd>
+              <dd className="id-text">{selectedPkg.mfd ?? '—'}</dd>
               <dt className="text-muted">Expiry</dt>
-              <dd className="id-text font-semibold">{selectedPkg.batch?.exp ?? '—'}</dd>
+              <dd className="id-text font-semibold">{selectedPkg.exp ?? '—'}</dd>
               <dt className="text-muted">Shipment Ref</dt>
-              <dd className="id-text">{selectedPkg.shipmentRef ?? '—'}</dd>
-              <dt className="text-muted">Public checks</dt>
-              <dd className="id-text">{selectedPkg.verifyCount ?? 0}</dd>
+              <dd className="id-text">{selectedPkg.current_shipment_ref ?? '—'}</dd>
             </dl>
-
-            <div>
-              <h3 className="mb-3 text-xs font-bold uppercase tracking-wide text-muted">
-                Custody History
-              </h3>
-              <Timeline
-                items={(selectedPkg.history ?? []).map(([evt, orgId, date]) => ({
-                  title: evt,
-                  meta: `${orgName(orgId)} · ${date}`
-                }))}
-              />
-            </div>
           </div>
         )}
       </Drawer>

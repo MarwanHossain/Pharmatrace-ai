@@ -1,9 +1,12 @@
+// PharmaTrace AI — Public Verification Portal
+// Connected to live MariaDB verification engine (Milestone M7.2)
+
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ShieldCheck, Search, QrCode, AlertTriangle, ArrowRight } from 'lucide-react'
+import { ShieldCheck, Search, QrCode, AlertTriangle, ArrowRight, Info } from 'lucide-react'
 import { StatusBadge, Timeline } from '../../../components/ui'
 import QrScanner from '../../../components/scanner/QrScanner'
-import { useDemoData } from '../../../contexts/DemoData'
+import { verifyPackage } from '../../../services/verificationApi'
 import { parseQrPayload } from '../../../services/qrPayload'
 import { formatPublicHistoryTitle } from '../../../services/verification'
 
@@ -12,8 +15,10 @@ const COPY = {
   invalid: 'This identifier could not be found in the registry. Check for typing errors or ask your pharmacist to inspect the pack.',
   expired: 'This package is past its expiry date. Do not use it.',
   quarantined: 'This package has been quarantined due to a quality or damage report. Do not use it; ask your pharmacist.',
+  rejected: 'This package was rejected during regulatory review or receiving inspection. Do not use it.',
   dispensed: 'This package has already been recorded as dispensed.',
   unshipped: 'This serial is registered to the manufacturer, but the package has not been dispatched into the supply chain yet. It should not appear for retail sale.',
+  in_transit: 'This package is currently in transit within the authorized supply chain.',
   incomplete: 'The complete journey of this package could not be established. This is not proof of a problem; ask your pharmacist.'
 }
 
@@ -21,18 +26,10 @@ export default function Verify() {
   const [searchParams] = useSearchParams()
   const querySerialParam = searchParams.get('serial')
 
-  const {
-    verifyAndRecord,
-    inspectSerial,
-    productOf,
-    locksSupported,
-    locksUnavailableError
-  } = useDemoData()
   const [v, setV] = useState('')
   const [r, setR] = useState(null)
   const [verifying, setVerifying] = useState(false)
   const [err, setErr] = useState('')
-  const [readOnlyMode, setReadOnlyMode] = useState(false)
   const [urlPreviewNotice, setUrlPreviewNotice] = useState(false)
   const [showScanner, setShowScanner] = useState(false)
 
@@ -43,17 +40,24 @@ export default function Verify() {
       setV(String(querySerialParam))
       setR(null)
       setUrlPreviewNotice(false)
-      setReadOnlyMode(false)
       setErr(parsed.reason || 'Malformed or unsupported verification serial in URL.')
       return
     }
-    // Strictly read-only preview on URL open / F5 reload so refresh never inflates verifyCount
-    setV(parsed.serial)
+
+    const cleanSerial = parsed.serial
+    setV(cleanSerial)
     setErr('')
-    setReadOnlyMode(false)
     setUrlPreviewNotice(true)
-    setR(inspectSerial(parsed.serial))
-  }, [querySerialParam, inspectSerial])
+
+    // Read-only inspection on URL parameter open so refresh does not inflate verifyCount
+    verifyPackage(cleanSerial, { record: false })
+      .then(res => {
+        setR(res)
+      })
+      .catch(e => {
+        setErr(e.message || 'Unable to check package identifier against registry.')
+      })
+  }, [querySerialParam])
 
   async function runVerify(rawInput) {
     if (verifying) return
@@ -71,19 +75,12 @@ export default function Verify() {
     setV(serial)
     setVerifying(true)
     setErr('')
-    setReadOnlyMode(false)
     setUrlPreviewNotice(false)
     try {
-      const res = await verifyAndRecord(serial)
-      if (!res || res.ok === false) {
-        setErr(res?.error || 'Unable to verify package serial.')
-        if (res?.code === 'locks_unavailable') {
-          setReadOnlyMode(true)
-          setR(inspectSerial(serial))
-        }
-        return
-      }
+      const res = await verifyPackage(serial, { record: true })
       setR(res)
+    } catch (e) {
+      setErr(e.message || 'Unable to verify package serial against registry.')
     } finally {
       setVerifying(false)
     }
@@ -104,7 +101,7 @@ export default function Verify() {
               Report a problem
             </Link>
             <Link to="/login" className="text-sm font-medium text-slate-300 hover:text-white">
-              Demo sign-in →
+              Portal sign-in →
             </Link>
           </div>
         </div>
@@ -130,7 +127,7 @@ export default function Verify() {
             id="s"
             value={v}
             onChange={e => setV(e.target.value)}
-            placeholder="e.g. DEMO-PCM-2601-00031"
+            placeholder="e.g. SN-BATCH-2026-A1-000001"
             className="id-text min-w-0 flex-1 rounded-md border border-line px-4 py-3"
           />
           <button
@@ -159,7 +156,7 @@ export default function Verify() {
                 runVerify(serial)
                 setShowScanner(false)
               }}
-              placeholder="Scan or enter serial (e.g. DEMO-PCM-2601-00031)"
+              placeholder="Scan or enter serial (e.g. SN-BATCH-2026-A1-000001)"
             />
           </div>
         )}
@@ -168,20 +165,19 @@ export default function Verify() {
           Enter a serialized package identifier or scan a package QR verification link to view its recorded journey.
         </p>
 
-        {(!locksSupported || err) && (
+        {err && (
           <div
             role="alert"
             className="mt-4 rounded-md border border-quarantine-line bg-quarantine-soft p-3 text-xs font-medium text-quarantine"
           >
-            {err || locksUnavailableError}
-            {readOnlyMode && ' Showing read-only lookup result; verification check was not recorded.'}
+            {err}
           </div>
         )}
 
         {urlPreviewNotice && r && !err && (
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-surface p-3 text-xs text-ink">
             <span>
-              Loaded current traceability status from QR link without altering verification count.
+              Loaded current traceability status from verification link without incrementing verification counter.
             </span>
             <button
               type="button"
@@ -198,70 +194,104 @@ export default function Verify() {
           <section aria-live="polite" className="mt-8 rounded-lg border border-line p-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
-                <StatusBadge status={r.state} />
-                {r.found && (
+                <StatusBadge status={r.status || (r.valid ? 'verified' : 'invalid')} />
+                {r.valid && (
                   <span className="id-text text-xs text-muted">
-                    {r.verifyCount} verification check(s) recorded
+                    {r.verifyCount ?? 0} verification check(s) recorded
                   </span>
                 )}
               </div>
-              {r.serial && <span className="id-text text-xs font-semibold text-muted">{r.serial}</span>}
+              {r.serial && (
+                <span className="id-text text-xs font-semibold text-muted">{r.serial}</span>
+              )}
             </div>
-            <p className="mt-3 text-sm">{COPY[r.state]}</p>
 
-            {r.unusualActivity && (
+            <p className="mt-3 text-sm text-ink font-medium">
+              {r.message || COPY[r.status] || COPY.verified}
+            </p>
+
+            {/* Mandatory Statutory Disclaimer */}
+            <div className="mt-4 rounded-md border border-line bg-slate-50 p-3.5 text-xs text-slate-700 leading-relaxed">
+              <div className="flex items-center gap-1.5 font-bold text-navy mb-1">
+                <Info size={14} className="text-clinical shrink-0" />
+                Statutory Physical Verification Notice
+              </div>
+              <p>
+                {r.disclaimer ||
+                  'Digital verification confirms this package identifier is recorded in the DGDA-registered supply chain. A valid QR verification response does not constitute physical proof of chemical composition or physical pack authenticity. Always inspect tamper-evident seals, packaging integrity, and physical hologram before use.'}
+              </p>
+            </div>
+
+            {r.verifyCount >= 5 && (
               <div className="mt-4 rounded-md border border-amber-line bg-amber-soft p-3 text-xs text-amber-ink">
                 <div className="mb-1 flex items-center gap-2 font-semibold">
                   <StatusBadge status="unusual" />
-                  <span>{r.verifyCount} checks recorded</span>
+                  <span>{r.verifyCount} verification checks recorded</span>
                 </div>
                 Repeated verification was detected for this serial. Repeated scans can occur legitimately and are not proof of counterfeiting; ask your pharmacist if you have concerns.
               </div>
             )}
 
-            {r.found && (
+            {r.valid && (
               <>
                 <dl className="mt-4 grid grid-cols-1 gap-2 border-t border-line pt-4 text-sm sm:grid-cols-3">
                   <div>
-                    <dt className="text-xs text-muted">Authenticity</dt>
-                    <dd className="mt-1">
-                      <StatusBadge status={r.authenticityStatus} />
-                    </dd>
-                  </div>
-                  <div>
                     <dt className="text-xs text-muted">Supply-chain status</dt>
                     <dd className="mt-1">
-                      <StatusBadge status={r.supplyChainStatus} />
+                      <StatusBadge status={r.status === 'expired' ? 'expired' : r.status === 'quarantined' ? 'quarantined' : 'released'} />
                     </dd>
                   </div>
                   <div>
-                    <dt className="text-xs text-muted">Dispensing status</dt>
-                    <dd className="mt-1">
-                      <StatusBadge status={r.dispensingStatus} />
+                    <dt className="text-xs text-muted">Current Custodian</dt>
+                    <dd className="mt-1 font-semibold text-navy truncate">
+                      {r.custody?.currentCustodianName || r.manufacturer?.name || 'Manufacturer'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted">Allocation</dt>
+                    <dd className="mt-1 font-semibold text-navy">
+                      {r.custody?.allocationType || 'COMMERCIAL'}
                     </dd>
                   </div>
                 </dl>
 
-                {r.b && (
+                {r.batch && r.product && (
                   <dl className="mt-4 grid grid-cols-2 gap-2 border-t border-line pt-4 text-sm">
                     <dt className="text-muted">Medicine</dt>
-                    <dd className="font-semibold">
-                      {productOf(r.b.productId)?.name} {productOf(r.b.productId)?.strength}
+                    <dd className="font-semibold text-navy">
+                      {r.product.name} {r.product.strength}
+                      {r.product.genericName && (
+                        <span className="block text-xs font-normal text-clinical">
+                          {r.product.genericName}
+                        </span>
+                      )}
                     </dd>
+                    <dt className="text-muted">Form & Pack</dt>
+                    <dd className="text-sm">
+                      {r.product.dosageForm || '—'} · {r.product.packSize || '—'}
+                    </dd>
+                    <dt className="text-muted">GTIN-14</dt>
+                    <dd className="id-text font-semibold">{r.product.gtin || '—'}</dd>
                     <dt className="text-muted">Batch</dt>
-                    <dd className="id-text font-semibold">{r.b.no}</dd>
+                    <dd className="id-text font-semibold">{r.batch.batchNo}</dd>
+                    <dt className="text-muted">Manufactured</dt>
+                    <dd className="id-text">{r.batch.mfd}</dd>
                     <dt className="text-muted">Expiry</dt>
-                    <dd className="id-text font-semibold">{r.b.exp}</dd>
+                    <dd className={`id-text font-semibold ${r.status === 'expired' ? 'text-quarantine' : ''}`}>
+                      {r.batch.exp}
+                    </dd>
+                    <dt className="text-muted">Manufacturer</dt>
+                    <dd className="text-navy">{r.manufacturer?.name || '—'}</dd>
                   </dl>
                 )}
 
-                {r.p?.history?.length > 0 && (
+                {r.journey && r.journey.length > 0 && (
                   <>
-                    <h2 className="mb-2 mt-5 text-sm font-bold text-navy">Simplified journey</h2>
+                    <h2 className="mb-2 mt-5 text-sm font-bold text-navy">Recorded journey</h2>
                     <Timeline
-                      items={r.p.history.map(([t, , d]) => ({
-                        title: formatPublicHistoryTitle(t),
-                        meta: d
+                      items={r.journey.map(j => ({
+                        title: formatPublicHistoryTitle(j.eventType),
+                        meta: `${j.actorOrg || ''}${j.targetOrg ? ` → ${j.targetOrg}` : ''} · ${String(j.timestamp || '').slice(0, 10)}`
                       }))}
                     />
                   </>

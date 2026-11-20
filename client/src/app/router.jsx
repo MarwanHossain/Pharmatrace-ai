@@ -34,6 +34,8 @@ import PharmVerifyDispense from '../features/pharmacy/verify-dispense/VerifyDisp
 import AdminDashboard from '../features/admin/dashboard/Dashboard'
 import AdminOrganizations from '../features/admin/organizations/Organizations'
 import AdminUsers from '../features/admin/users/Users'
+import RegistrationQueue from '../features/admin/registrations/RegistrationQueue'
+import RegistrationDossier from '../features/admin/registrations/RegistrationDossier'
 
 import InvDashboard from '../features/investigator/dashboard/Dashboard'
 import InvAlerts from '../features/investigator/alerts/Alerts'
@@ -58,6 +60,7 @@ const IMPL = {
   'pharmacy/inventory': <PharmInventory />,
   'pharmacy/verify-dispense': <PharmVerifyDispense />,
   'admin/dashboard': <AdminDashboard />,
+  'admin/registrations': <RegistrationQueue />,
   'admin/organizations': <AdminOrganizations />,
   'admin/users': <AdminUsers />,
   'investigator/dashboard': <InvDashboard />,
@@ -80,6 +83,7 @@ const Msg = ({ t }) => (
 export const router = createBrowserRouter([
   { path: '/', element: <Navigate to="/login" replace /> },
   { path: '/login', element: <Login /> },
+  { path: '/login/:roleParam', element: <Login /> },
   { path: '/register', element: <RegistrationLanding /> },
   { path: '/register/track', element: <RegistrationTracking /> },
   { path: '/resubmit', element: <RegistrationResubmit /> },
@@ -96,7 +100,10 @@ export const router = createBrowserRouter([
       ...cfg.nav.map(n => ({
         path: n.path,
         element: IMPL[`${role}/${n.path}`] ?? <Placeholder title={n.label} />
-      }))
+      })),
+      ...(role === 'admin'
+        ? [{ path: 'registrations/:id', element: <RegistrationDossier /> }]
+        : [])
     ]
   })),
   { path: '*', element: <Msg t="Page not found" /> }

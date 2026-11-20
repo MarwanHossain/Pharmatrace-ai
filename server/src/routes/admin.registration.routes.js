@@ -5,6 +5,7 @@ import {
   listRegistrations,
   getRegistrationDetail,
   downloadDocument,
+  previewDocument,
   startReview,
   requestInfo,
   resendInformationLink,
@@ -25,6 +26,7 @@ router.use(requireRoles('admin'))
 router.get('/', listRegistrations)
 router.get('/:id', getRegistrationDetail)
 router.get('/:id/documents/:docId/download', downloadDocument)
+router.get('/:id/documents/:docId/preview', previewDocument)
 
 // State Transition Endpoints (Protected by CSRF)
 router.post('/:id/review', csrfProtection, startReview)

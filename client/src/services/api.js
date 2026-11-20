@@ -78,6 +78,8 @@ export async function apiRequest(endpoint, options = {}) {
     body,
     signal,
     cache,
+    credentials = 'include',
+    responseType,
     ...restOptions
   } = options
 
@@ -116,8 +118,31 @@ export async function apiRequest(endpoint, options = {}) {
       body: processedBody,
       signal,
       cache,
+      credentials,
       ...restOptions
     })
+
+    if (responseType === 'blob') {
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type') || ''
+        let parsedData = null
+        if (contentType.includes('application/json')) {
+          try {
+            parsedData = await response.json()
+          } catch {
+            parsedData = null
+          }
+        } else {
+          try {
+            parsedData = await response.text()
+          } catch {
+            parsedData = null
+          }
+        }
+        throw normalizeApiError(response, parsedData, null)
+      }
+      return await response.blob()
+    }
 
     const contentType = response.headers.get('content-type') || ''
     let parsedData = null
@@ -153,7 +178,61 @@ export const api = {
   post: (endpoint, body, options = {}) => apiRequest(endpoint, { ...options, method: 'POST', body }),
   put: (endpoint, body, options = {}) => apiRequest(endpoint, { ...options, method: 'PUT', body }),
   patch: (endpoint, body, options = {}) => apiRequest(endpoint, { ...options, method: 'PATCH', body }),
-  delete: (endpoint, options = {}) => apiRequest(endpoint, { ...options, method: 'DELETE' })
+  delete: (endpoint, options = {}) => apiRequest(endpoint, { ...options, method: 'DELETE' }),
+  blob: (endpoint, options = {}) => apiRequest(endpoint, { ...options, method: 'GET', responseType: 'blob' })
+}
+
+/**
+ * Changes authenticated user's password.
+ * Revokes all active sessions across devices and increments token_version in MariaDB.
+ *
+ * @param {string} currentPassword
+ * @param {string} newPassword
+ * @returns {Promise<{ success: boolean, message: string }>}
+ */
+export async function changePassword(currentPassword, newPassword) {
+  return api.post('/v1/auth/change-password', { currentPassword, newPassword })
+}
+
+/**
+ * Downloads a binary file from the API and triggers a browser file download dialog.
+ * Uses an authenticated blob fetch and safely cleans up temporary Object URLs.
+ *
+ * @param {string} endpoint - API relative path
+ * @param {string} [fallbackFilename='document.bin'] - Filename for download
+ * @param {object} [options={}] - Additional apiRequest options
+ * @returns {Promise<void>}
+ */
+export async function downloadFile(endpoint, fallbackFilename = 'document.bin', options = {}) {
+  const blob = await apiRequest(endpoint, {
+    ...options,
+    method: 'GET',
+    responseType: 'blob'
+  })
+
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return blob
+  }
+
+  const objectUrl = window.URL.createObjectURL(blob)
+  try {
+    const anchor = document.createElement('a')
+    anchor.style.display = 'none'
+    anchor.href = objectUrl
+    anchor.download = fallbackFilename
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+  } finally {
+    // Revoke object URL after delay to allow browser to trigger download
+    setTimeout(() => {
+      try {
+        window.URL.revokeObjectURL(objectUrl)
+      } catch {
+        // Ignore revocation errors
+      }
+    }, 1000)
+  }
 }
 
 export default api

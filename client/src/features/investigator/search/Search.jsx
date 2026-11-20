@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react'
-import { QrCode, Search as SearchIcon, ShieldAlert, X } from 'lucide-react'
+// PharmaTrace AI — Regulatory Traceability Search
+// Milestone M8 Implementation — Connected to Live MariaDB Backend
+import { useState } from 'react'
+import { QrCode, Search as SearchIcon, ShieldAlert, X, AlertTriangle, Clock } from 'lucide-react'
 import {
   PageHeader,
   DataTable,
@@ -10,118 +12,83 @@ import {
   EmptyState
 } from '../../../components/ui'
 import QrScanner from '../../../components/scanner/QrScanner'
-import { useDemoData } from '../../../contexts/DemoData'
 import { extractSerialFromInput } from '../../../services/qrPayload'
-import { getPackageTraceabilityEvents } from '../../../services/traceabilityEvents'
+import * as investigatorApi from '../../../services/investigatorApi'
 
 export default function Search() {
-  const { packages, batches, shipments, alerts, traceabilityEvents, orgName, productOf } = useDemoData()
-
-  const quickExamples = useMemo(() => {
-    const list = []
-    if (packages[0]?.serial) list.push(packages[0].serial)
-    if (batches[0]?.no) list.push(batches[0].no)
-    if (shipments[0]?.ref) list.push(shipments[0].ref)
-    return list
-  }, [packages, batches, shipments])
-
   const [input, setInput] = useState('')
   const [query, setQuery] = useState('')
   const [showScanner, setShowScanner] = useState(false)
-  const [selectedPkgSerial, setSelectedPkgSerial] = useState(null)
-  const [selectedShipmentRef, setSelectedShipmentRef] = useState(null)
+  const [searching, setSearching] = useState(false)
+  const [searchResults, setSearchResults] = useState({ packages: [], batches: [], shipments: [] })
+  const [error, setError] = useState('')
 
-  const extractedQuery = /[/?#:=]/.test(query) ? extractSerialFromInput(query) : ''
-  const trimmed = (extractedQuery || query).trim().toLowerCase()
+  // Selected package detail state
+  const [selectedPkgDetails, setSelectedPkgDetails] = useState(null)
+  const [loadingDetails, setLoadingDetails] = useState(false)
+  const [detailsError, setDetailsError] = useState('')
 
-  const batchMap = useMemo(() => {
-    const map = new Map()
-    for (const b of batches) map.set(b.id, b)
-    return map
-  }, [batches])
-
-  const matchingBatches = useMemo(() => {
-    if (!trimmed) return []
-    return batches.filter((b) => {
-      const no = b.no.toLowerCase()
-      const prod = productOf(b.productId)?.name?.toLowerCase() ?? ''
-      return no.includes(trimmed) || trimmed.includes(no) || prod.includes(trimmed)
-    })
-  }, [batches, trimmed, productOf])
-
-  const matchingPackages = useMemo(() => {
-    if (!trimmed) return []
-    return packages.filter((p) => {
-      const batch = batchMap.get(p.batchId)
-      const serialMatch = p.serial.toLowerCase().includes(trimmed)
-      const batchMatch = batch?.no.toLowerCase().includes(trimmed)
-      const shipmentMatch = (p.shipmentRef ?? '').toLowerCase().includes(trimmed)
-      return serialMatch || batchMatch || shipmentMatch
-    })
-  }, [packages, batchMap, trimmed])
-
-  const matchingShipments = useMemo(() => {
-    if (!trimmed) return []
-    const matchingBatchIds = new Set(matchingBatches.map((b) => b.id))
-    const pkgSerialsInMatchingBatches = new Set(
-      packages.filter((p) => matchingBatchIds.has(p.batchId)).map((p) => p.serial)
-    )
-    return shipments.filter((s) => {
-      if (s.ref.toLowerCase().includes(trimmed)) return true
-      return (s.packageSerials ?? []).some(
-        (ser) => ser.toLowerCase().includes(trimmed) || pkgSerialsInMatchingBatches.has(ser)
-      )
-    })
-  }, [shipments, matchingBatches, packages, trimmed])
-
-  const selectedPkg = selectedPkgSerial
-    ? packages.find((p) => p.serial === selectedPkgSerial) ?? null
-    : null
-  const selectedPkgBatch = selectedPkg ? batchMap.get(selectedPkg.batchId) ?? null : null
-  const selectedPkgAlerts = selectedPkg
-    ? alerts.filter((a) => a.serial === selectedPkg.serial)
-    : []
-  const selectedPkgTraceEvents = selectedPkg
-    ? getPackageTraceabilityEvents(traceabilityEvents, selectedPkg.serial)
-    : []
-
-  const selectedShipment = selectedShipmentRef
-    ? shipments.find((s) => s.ref === selectedShipmentRef) ?? null
-    : null
-
-  function runSearch(value) {
-    setInput(value)
-    setQuery(value)
+  async function executeSearch(searchTerm) {
+    const term = (searchTerm || '').trim()
+    if (!term) {
+      setSearchResults({ packages: [], batches: [], shipments: [] })
+      return
+    }
+    setSearching(true)
+    setError('')
+    try {
+      const results = await investigatorApi.searchTraceability(term)
+      setSearchResults(results)
+    } catch (err) {
+      setError(err.message || 'Traceability search failed.')
+    } finally {
+      setSearching(false)
+    }
   }
 
-  function handleSubmit(e) {
-    e.preventDefault()
-    setQuery(input)
+  async function handleOpenPackageDetails(serial) {
+    setLoadingDetails(true)
+    setDetailsError('')
+    try {
+      const details = await investigatorApi.getPackageDetails(serial)
+      setSelectedPkgDetails(details)
+    } catch (err) {
+      setDetailsError(err.message || 'Failed to retrieve package custody history.')
+    } finally {
+      setLoadingDetails(false)
+    }
   }
 
   function handleScan(scanned) {
     const normalized = extractSerialFromInput(scanned) || String(scanned ?? '').trim().toUpperCase()
     if (!normalized) return
-    runSearch(normalized)
+    setInput(normalized)
+    setQuery(normalized)
     setShowScanner(false)
-    const exactPkg = packages.find(
-      (p) => p.serial.toUpperCase() === normalized
-    )
-    if (exactPkg) {
-      setSelectedPkgSerial(exactPkg.serial)
-    }
+    executeSearch(normalized)
+    handleOpenPackageDetails(normalized)
+  }
+
+  function handleSubmit(e) {
+    e.preventDefault()
+    setQuery(input)
+    executeSearch(input)
   }
 
   function clearSearch() {
     setInput('')
     setQuery('')
+    setSearchResults({ packages: [], batches: [], shipments: [] })
   }
+
+  const { packages = [], batches = [], shipments = [] } = searchResults
+  const hasResults = packages.length > 0 || batches.length > 0 || shipments.length > 0
 
   return (
     <>
       <PageHeader
-        title="Traceability Search"
-        description="Search serial numbers, batch numbers, or shipment references to inspect custody history and supply-chain records."
+        title="Regulatory Traceability Search"
+        description="Query the live MariaDB pharmaceutical registry by package serial, QR verification URL, batch number, or shipment reference."
         actions={
           <Button
             variant="secondary"
@@ -144,11 +111,8 @@ export default function Search() {
             <input
               id="traceability-search-input"
               value={input}
-              onChange={(e) => {
-                setInput(e.target.value)
-                setQuery(e.target.value)
-              }}
-              placeholder="Enter package serial, batch number, or shipment reference"
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Enter package serial, QR URL, batch number, or shipment reference..."
               className="id-text w-full rounded-md border border-line py-2 pl-9 pr-8 text-sm"
             />
             {input && (
@@ -162,26 +126,10 @@ export default function Search() {
               </button>
             )}
           </div>
-          <Button type="submit" variant="primary">
-            Search
+          <Button type="submit" variant="primary" disabled={searching}>
+            {searching ? 'Searching...' : 'Search'}
           </Button>
         </form>
-
-        {quickExamples.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="font-medium text-muted">Quick examples:</span>
-            {quickExamples.map((ex) => (
-              <button
-                key={ex}
-                type="button"
-                onClick={() => runSearch(ex)}
-                className="id-text rounded border border-line bg-surface px-2 py-1 font-medium text-navy transition hover:border-navy hover:bg-white"
-              >
-                {ex}
-              </button>
-            ))}
-          </div>
-        )}
 
         {showScanner && (
           <div className="pt-2">
@@ -194,330 +142,303 @@ export default function Search() {
         )}
       </div>
 
-      {!trimmed ? (
-        <EmptyState
-          title="Enter a traceability query"
-          text="Search by full or partial serial number, batch number, or shipment reference, or use the QR Scanner above."
-        />
-      ) : (
-        <div className="space-y-6">
-          <section>
-            <h2 className="mb-2 text-sm font-bold text-navy">
-              Matching Packages ({matchingPackages.length})
-            </h2>
-            <DataTable
-              rows={matchingPackages}
-              empty="No packages match this query."
-              onRowClick={(row) => setSelectedPkgSerial(row.serial)}
-              columns={[
-                {
-                  key: 'serial',
-                  label: 'Serial',
-                  render: (r) => (
-                    <span className="id-text whitespace-nowrap font-semibold">{r.serial}</span>
-                  )
-                },
-                {
-                  key: 'batch',
-                  label: 'Product / Batch',
-                  render: (r) => {
-                    const b = batchMap.get(r.batchId)
-                    const p = b ? productOf(b.productId) : null
-                    return (
-                      <span>
-                        {p?.name ?? '—'}{' '}
-                        <span className="id-text text-xs text-muted">({b?.no ?? '—'})</span>
-                      </span>
-                    )
-                  }
-                },
-                {
-                  key: 'custodian',
-                  label: 'Custodian',
-                  render: (r) => orgName(r.custodian)
-                },
-                {
-                  key: 'verifyCount',
-                  label: 'Verify Count',
-                  render: (r) => <span className="id-text">{r.verifyCount ?? 0}</span>
-                },
-                {
-                  key: 'shipmentRef',
-                  label: 'Shipment',
-                  render: (r) => (
-                    <span className="id-text text-muted">{r.shipmentRef ?? '—'}</span>
-                  )
-                },
-                {
-                  key: 'status',
-                  label: 'Status',
-                  render: (r) => <StatusBadge status={r.status} />
-                }
-              ]}
-            />
-          </section>
-
-          <section>
-            <h2 className="mb-2 text-sm font-bold text-navy">
-              Matching Batches ({matchingBatches.length})
-            </h2>
-            <DataTable
-              rows={matchingBatches}
-              empty="No batches match this query."
-              columns={[
-                {
-                  key: 'no',
-                  label: 'Batch No',
-                  render: (r) => <span className="id-text font-semibold">{r.no}</span>
-                },
-                {
-                  key: 'product',
-                  label: 'Product',
-                  render: (r) => {
-                    const p = productOf(r.productId)
-                    return p ? `${p.name} ${p.strength}` : '—'
-                  }
-                },
-                {
-                  key: 'mfd',
-                  label: 'Manufactured',
-                  render: (r) => <span className="id-text whitespace-nowrap">{r.mfd}</span>
-                },
-                {
-                  key: 'exp',
-                  label: 'Expiry',
-                  render: (r) => <span className="id-text whitespace-nowrap">{r.exp}</span>
-                },
-                {
-                  key: 'quantity',
-                  label: 'Batch Qty',
-                  render: (r) => <span className="id-text">{r.quantity}</span>
-                },
-                {
-                  key: 'release',
-                  label: 'QA Release',
-                  render: (r) => (
-                    <StatusBadge status={r.release === 'Released' ? 'active' : 'pending'} />
-                  )
-                }
-              ]}
-            />
-          </section>
-
-          <section>
-            <h2 className="mb-2 text-sm font-bold text-navy">
-              Matching Shipments ({matchingShipments.length})
-            </h2>
-            <DataTable
-              rows={matchingShipments}
-              empty="No shipments match this query."
-              onRowClick={(row) => setSelectedShipmentRef(row.ref)}
-              columns={[
-                {
-                  key: 'ref',
-                  label: 'Reference',
-                  render: (r) => (
-                    <span className="id-text whitespace-nowrap font-semibold">{r.ref}</span>
-                  )
-                },
-                {
-                  key: 'from',
-                  label: 'Origin',
-                  render: (r) => orgName(r.from)
-                },
-                {
-                  key: 'to',
-                  label: 'Destination',
-                  render: (r) => orgName(r.to)
-                },
-                {
-                  key: 'count',
-                  label: 'Packages',
-                  render: (r) => <span className="id-text">{r.count}</span>
-                },
-                {
-                  key: 'dispatched',
-                  label: 'Dispatched',
-                  render: (r) => (
-                    <span className="id-text whitespace-nowrap">{r.dispatched ?? '—'}</span>
-                  )
-                },
-                {
-                  key: 'status',
-                  label: 'Status',
-                  render: (r) => <StatusBadge status={r.status} />
-                },
-                {
-                  key: 'receiving',
-                  label: 'Receiving'
-                }
-              ]}
-            />
-          </section>
+      {error && (
+        <div role="alert" className="mb-6 rounded-lg border border-quarantine-line bg-quarantine-soft p-4 text-sm font-semibold text-quarantine">
+          {error}
         </div>
       )}
 
+      {!query ? (
+        <EmptyState
+          title="Enter a traceability query"
+          text="Search by full or partial serial number, QR verification URL, batch number, or shipment reference."
+        />
+      ) : !hasResults && !searching ? (
+        <EmptyState
+          title="No matching records found"
+          text={`No packages, batches, or shipments matched the query "${query}".`}
+        />
+      ) : (
+        <div className="space-y-6">
+          {/* Packages */}
+          {packages.length > 0 && (
+            <section>
+              <h2 className="mb-2 text-sm font-bold text-navy">
+                Matching Packages ({packages.length})
+              </h2>
+              <DataTable
+                rows={packages}
+                onRowClick={(row) => handleOpenPackageDetails(row.serial)}
+                columns={[
+                  {
+                    key: 'serial',
+                    label: 'Serial',
+                    render: (r) => (
+                      <span className="id-text whitespace-nowrap font-semibold text-clinical hover:underline">
+                        {r.serial}
+                      </span>
+                    )
+                  },
+                  {
+                    key: 'product',
+                    label: 'Product / Strength',
+                    render: (r) => `${r.product_name || '—'} ${r.strength || ''}`
+                  },
+                  {
+                    key: 'batch_no',
+                    label: 'Batch No',
+                    render: (r) => <span className="id-text font-medium">{r.batch_no || '—'}</span>
+                  },
+                  {
+                    key: 'custodian_name',
+                    label: 'Physical Custodian',
+                    render: (r) => r.custodian_name || '—'
+                  },
+                  {
+                    key: 'verify_count',
+                    label: 'Verify Scans',
+                    render: (r) => <span className="id-text font-semibold">{r.verify_count ?? 0}</span>
+                  },
+                  {
+                    key: 'status',
+                    label: 'Status',
+                    render: (r) => <StatusBadge status={r.status} />
+                  },
+                  {
+                    key: 'alerts',
+                    label: 'Active Leads',
+                    render: (r) => (
+                      r.active_alerts_count > 0 ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-quarantine">
+                          <AlertTriangle size={12} /> {r.active_alerts_count} alert(s)
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted">Clear</span>
+                      )
+                    )
+                  }
+                ]}
+              />
+            </section>
+          )}
+
+          {/* Batches */}
+          {batches.length > 0 && (
+            <section>
+              <h2 className="mb-2 text-sm font-bold text-navy">
+                Matching Batches ({batches.length})
+              </h2>
+              <DataTable
+                rows={batches}
+                columns={[
+                  {
+                    key: 'batch_no',
+                    label: 'Batch No',
+                    render: (r) => <span className="id-text font-semibold">{r.batch_no}</span>
+                  },
+                  {
+                    key: 'product',
+                    label: 'Product',
+                    render: (r) => `${r.product_name} ${r.strength || ''}`
+                  },
+                  {
+                    key: 'manufacturer',
+                    label: 'Manufacturer',
+                    render: (r) => r.manufacturer_name
+                  },
+                  {
+                    key: 'mfd',
+                    label: 'Mfg Date',
+                    render: (r) => <span className="id-text whitespace-nowrap">{r.mfd}</span>
+                  },
+                  {
+                    key: 'exp',
+                    label: 'Expiry',
+                    render: (r) => <span className="id-text whitespace-nowrap">{r.exp}</span>
+                  },
+                  {
+                    key: 'quantity',
+                    label: 'Quantity',
+                    render: (r) => <span className="id-text">{r.quantity}</span>
+                  },
+                  {
+                    key: 'release_status',
+                    label: 'QA Release',
+                    render: (r) => <StatusBadge status={r.release_status} />
+                  }
+                ]}
+              />
+            </section>
+          )}
+
+          {/* Shipments */}
+          {shipments.length > 0 && (
+            <section>
+              <h2 className="mb-2 text-sm font-bold text-navy">
+                Matching Shipments ({shipments.length})
+              </h2>
+              <DataTable
+                rows={shipments}
+                columns={[
+                  {
+                    key: 'ref',
+                    label: 'Shipment Ref',
+                    render: (r) => <span className="id-text font-semibold">{r.ref}</span>
+                  },
+                  {
+                    key: 'origin',
+                    label: 'Origin Organization',
+                    render: (r) => r.origin_name
+                  },
+                  {
+                    key: 'destination',
+                    label: 'Destination Organization',
+                    render: (r) => r.destination_name
+                  },
+                  {
+                    key: 'count',
+                    label: 'Package Count',
+                    render: (r) => <span className="id-text">{r.count}</span>
+                  },
+                  {
+                    key: 'status',
+                    label: 'Status',
+                    render: (r) => <StatusBadge status={r.status} />
+                  },
+                  {
+                    key: 'dispatched_at',
+                    label: 'Dispatched At',
+                    render: (r) => (
+                      <span className="id-text whitespace-nowrap text-xs">
+                        {r.dispatched_at ? new Date(r.dispatched_at).toLocaleString() : '—'}
+                      </span>
+                    )
+                  }
+                ]}
+              />
+            </section>
+          )}
+        </div>
+      )}
+
+      {/* Package Custody Detail Drawer */}
       <Drawer
-        open={!!selectedPkg}
-        onClose={() => setSelectedPkgSerial(null)}
-        title="Package Custody Details"
+        open={!!selectedPkgDetails}
+        onClose={() => setSelectedPkgDetails(null)}
+        title={selectedPkgDetails ? `Package ${selectedPkgDetails.package.serial}` : 'Package Custody Record'}
       >
-        {selectedPkg && (
+        {selectedPkgDetails && (
           <div className="space-y-5">
-            {selectedPkgAlerts.length > 0 && (
-              <div className="flex items-start gap-2 rounded-md border border-amber-line bg-amber-soft p-3 text-xs text-amber-ink">
+            {selectedPkgDetails.alerts?.length > 0 && (
+              <div className="flex items-start gap-2 rounded-md border border-quarantine-line bg-quarantine-soft p-3 text-xs text-quarantine">
                 <ShieldAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
                 <div>
-                  <strong>Advisory lead — requires investigator review:</strong>{' '}
-                  {selectedPkgAlerts.length} open/recorded alert(s) linked to this serial (
-                  {selectedPkgAlerts.map((a) => a.id).join(', ')}).
+                  <strong>Active Regulatory Leads Recorded:</strong>{' '}
+                  {selectedPkgDetails.alerts.length} alert(s) linked to this package serial. Review custody anomalies before release.
                 </div>
               </div>
             )}
 
-            <dl className="space-y-2 text-sm">
-              <div className="flex justify-between gap-2">
-                <dt className="text-muted">Serial</dt>
-                <dd className="id-text font-semibold">{selectedPkg.serial}</dd>
-              </div>
-              {selectedPkgBatch && (
-                <>
-                  <div className="flex justify-between gap-2">
-                    <dt className="text-muted">Medicine</dt>
-                    <dd className="font-semibold">
-                      {productOf(selectedPkgBatch.productId)?.name}{' '}
-                      {productOf(selectedPkgBatch.productId)?.strength}
-                    </dd>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <dt className="text-muted">Batch</dt>
-                    <dd className="id-text font-semibold">{selectedPkgBatch.no}</dd>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <dt className="text-muted">Manufactured</dt>
-                    <dd className="id-text">{selectedPkgBatch.mfd}</dd>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <dt className="text-muted">Expiry</dt>
-                    <dd className="id-text">{selectedPkgBatch.exp}</dd>
-                  </div>
-                </>
-              )}
-              <div className="flex justify-between gap-2">
-                <dt className="text-muted">Current Custodian</dt>
-                <dd>{orgName(selectedPkg.custodian)}</dd>
-              </div>
-              <div className="flex justify-between gap-2">
-                <dt className="text-muted">Verify Count</dt>
-                <dd className="id-text font-semibold">{selectedPkg.verifyCount ?? 0}</dd>
-              </div>
-              <div className="flex justify-between gap-2">
-                <dt className="text-muted">Shipment Ref</dt>
-                <dd className="id-text">{selectedPkg.shipmentRef ?? '—'}</dd>
-              </div>
-              <div className="flex justify-between gap-2">
-                <dt className="text-muted">Status</dt>
-                <dd>
-                  <StatusBadge status={selectedPkg.status} />
-                </dd>
-              </div>
-            </dl>
-
-            <div className="border-t border-line pt-4">
-              <h3 className="mb-3 text-sm font-bold text-navy">Custody history</h3>
-              <Timeline
-                items={selectedPkg.history.map(([event, orgId, date]) => ({
-                  title: event,
-                  meta: `${orgName(orgId)} · ${date}`
-                }))}
-              />
+            <div>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Package Identifiers</h3>
+              <dl className="space-y-1.5 rounded-md border border-line p-3 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-muted">Serial Number</dt>
+                  <dd className="id-text font-bold text-navy">{selectedPkgDetails.package.serial}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted">GTIN-14</dt>
+                  <dd className="id-text">{selectedPkgDetails.product.gtin || '—'}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted">Allocation Tier</dt>
+                  <dd className="id-text font-semibold uppercase">{selectedPkgDetails.package.allocationType}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted">Public Verification Scans</dt>
+                  <dd className="id-text font-bold">{selectedPkgDetails.package.verifyCount ?? 0}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted">Current Custody Status</dt>
+                  <dd><StatusBadge status={selectedPkgDetails.package.status} /></dd>
+                </div>
+              </dl>
             </div>
 
-            <div className="border-t border-line pt-4">
-              <h3 className="mb-3 text-sm font-bold text-navy">
-                Traceability Event Log ({selectedPkgTraceEvents.length})
-              </h3>
-              {selectedPkgTraceEvents.length === 0 ? (
-                <p className="text-xs text-muted">No structured QR scan or transaction events recorded for this serial yet.</p>
-              ) : (
-                <Timeline
-                  items={[...selectedPkgTraceEvents].reverse().map((evt) => ({
-                    title: `${evt.eventType} (${evt.outcome})`,
-                    meta: `${evt.organizationId ? orgName(evt.organizationId) : evt.actorRole || 'Public'} · ${evt.timestamp}${
-                      evt.failureReason ? ` · ${evt.failureReason}` : ''
-                    }`
-                  }))}
-                />
-              )}
+            <div>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Pharmaceutical Product &amp; Batch</h3>
+              <dl className="space-y-1.5 rounded-md border border-line p-3 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-muted">Brand Name</dt>
+                  <dd className="font-semibold text-navy">{selectedPkgDetails.product.name}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted">Generic / Strength</dt>
+                  <dd>{selectedPkgDetails.product.genericName} ({selectedPkgDetails.product.strength})</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted">Batch Number</dt>
+                  <dd className="id-text font-semibold">{selectedPkgDetails.batch.batchNo}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted">Manufacture / Expiry</dt>
+                  <dd className="id-text">{selectedPkgDetails.batch.mfd} / {selectedPkgDetails.batch.exp}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted">QA Release</dt>
+                  <dd><StatusBadge status={selectedPkgDetails.batch.releaseStatus} /></dd>
+                </div>
+              </dl>
             </div>
-          </div>
-        )}
-      </Drawer>
 
-      <Drawer
-        open={!!selectedShipment}
-        onClose={() => setSelectedShipmentRef(null)}
-        title={selectedShipment ? `Shipment ${selectedShipment.ref}` : 'Shipment Details'}
-      >
-        {selectedShipment && (
-          <div className="space-y-5">
-            <dl className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <dt className="text-muted">Reference</dt>
-                <dd className="id-text font-semibold">{selectedShipment.ref}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-muted">Origin</dt>
-                <dd>{orgName(selectedShipment.from)}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-muted">Destination</dt>
-                <dd>{orgName(selectedShipment.to)}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-muted">Created</dt>
-                <dd className="id-text">{selectedShipment.created}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-muted">Dispatched</dt>
-                <dd className="id-text">{selectedShipment.dispatched ?? 'Not dispatched'}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-muted">Status</dt>
-                <dd>
-                  <StatusBadge status={selectedShipment.status} />
-                </dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-muted">Receiving</dt>
-                <dd>{selectedShipment.receiving}</dd>
-              </div>
-            </dl>
+            <div>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Supply Chain Stakeholders</h3>
+              <dl className="space-y-1.5 rounded-md border border-line p-3 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-muted">Manufacturer</dt>
+                  <dd className="font-medium">{selectedPkgDetails.manufacturer.name}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted">Mfg License</dt>
+                  <dd className="id-text text-xs">{selectedPkgDetails.manufacturer.license}</dd>
+                </div>
+                {selectedPkgDetails.custodian && (
+                  <>
+                    <div className="flex justify-between">
+                      <dt className="text-muted">Current Physical Custodian</dt>
+                      <dd className="font-medium text-navy">{selectedPkgDetails.custodian.name} ({selectedPkgDetails.custodian.type})</dd>
+                    </div>
+                    <div className="flex justify-between">
+                      <dt className="text-muted">Facility Address</dt>
+                      <dd className="text-right text-xs text-muted">{selectedPkgDetails.custodian.address}</dd>
+                    </div>
+                  </>
+                )}
+              </dl>
+            </div>
 
-            <div className="border-t border-line pt-4">
-              <h3 className="mb-2 text-sm font-bold text-navy">
-                Package Manifest ({selectedShipment.packageSerials?.length ?? 0})
+            <div>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-navy flex items-center gap-1.5">
+                <Clock size={14} /> Chronological Custody Chain ({selectedPkgDetails.timeline?.length ?? 0} events)
               </h3>
-              {selectedShipment.packageSerials?.length ? (
-                <ul className="max-h-72 space-y-1.5 overflow-y-auto rounded-md border border-line bg-surface p-2 text-xs">
-                  {selectedShipment.packageSerials.map((serial) => (
-                    <li key={serial}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedShipmentRef(null)
-                          setSelectedPkgSerial(serial)
-                        }}
-                        className="id-text flex w-full items-center justify-between rounded px-2 py-1.5 text-left font-medium text-navy hover:bg-white"
-                      >
-                        <span>{serial}</span>
-                        <span className="text-clinical">Inspect →</span>
-                      </button>
-                    </li>
+              {selectedPkgDetails.timeline?.length > 0 ? (
+                <div className="space-y-3 border-l-2 border-line pl-4">
+                  {selectedPkgDetails.timeline.map((evt, idx) => (
+                    <div key={idx} className="relative text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-navy">{evt.eventType}</span>
+                        <span className="id-text text-xs text-muted">{new Date(evt.timestamp).toLocaleString()}</span>
+                      </div>
+                      <div className="mt-0.5 text-xs text-ink">
+                        {evt.actorName && <span>Custodian: <strong>{evt.actorName}</strong></span>}
+                        {evt.targetName && <span> &rarr; Delivered to: <strong>{evt.targetName}</strong></span>}
+                        {evt.shipmentRef && <span className="ml-2 id-text font-semibold text-clinical">({evt.shipmentRef})</span>}
+                      </div>
+                    </div>
                   ))}
-                </ul>
+                </div>
               ) : (
-                <p className="text-sm text-muted">No package serials attached.</p>
+                <p className="text-xs text-muted">No custody transitions recorded.</p>
               )}
             </div>
           </div>

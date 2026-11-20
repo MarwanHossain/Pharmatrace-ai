@@ -12,15 +12,40 @@ const __dirname = path.dirname(__filename)
 const MIGRATIONS_DIR = path.resolve(__dirname, './migrations')
 
 export function getMigrationConfig(overrides = {}) {
+  const user = (overrides.user !== undefined ? overrides.user : env.MIGRATION_DB_USER || '').trim()
+
+  // Prohibit root fallback or missing migration account
+  if (!user || user.toLowerCase() === 'root') {
+    throw new Error(
+      'DATABASE_CONFIGURATION_ERROR: Direct migration execution as "root" is strictly prohibited. ' +
+      'PharmaTrace AI requires a dedicated migration account (MIGRATION_DB_USER=pharmatrace_migrator).'
+    )
+  }
+
+  const password = overrides.password !== undefined ? overrides.password : env.MIGRATION_DB_PASSWORD
+  if (password === undefined || password === null) {
+    throw new Error(
+      'DATABASE_CONFIGURATION_ERROR: Missing database password for migration user. ' +
+      'Please configure MIGRATION_DB_PASSWORD in server/.env.'
+    )
+  }
+
+  const targetDb = overrides.database || env.MIGRATION_DB_NAME
+  if (targetDb && env.NODE_ENV === 'test' && targetDb !== 'pharmatrace_ai_test') {
+    throw new Error(
+      `MIGRATION_SAFETY_ERROR: In test environment, migration database must strictly be 'pharmatrace_ai_test', got '${targetDb}'`
+    )
+  }
+
   return {
-    host: env.MIGRATION_DB_HOST,
-    port: env.MIGRATION_DB_PORT,
-    user: env.MIGRATION_DB_USER,
-    password: env.MIGRATION_DB_PASSWORD,
-    database: env.MIGRATION_DB_NAME,
-    charset: env.DB_CHARSET || 'utf8mb4',
+    host: overrides.host || env.MIGRATION_DB_HOST,
+    port: overrides.port || env.MIGRATION_DB_PORT,
+    user,
+    password,
+    database: targetDb,
+    charset: overrides.charset || env.DB_CHARSET || 'utf8mb4',
     multipleStatements: true,
-    connectTimeout: env.DB_CONNECT_TIMEOUT,
+    connectTimeout: overrides.connectTimeout || env.DB_CONNECT_TIMEOUT,
     ...overrides
   }
 }
