@@ -1,0 +1,7 @@
+# PharmaTrace AI — AI Service Python Dependencies
+#
+# Placeholder configuration: Python package dependencies, frameworks (e.g., FastAPI, Uvicorn,
+# PyTorch / PyTorch Geometric, scikit-learn, NetworkX, pandas, pydantic), and specific version pins
+# will be selected, evaluated, and pinned by the AI/ML developer during the machine learning implementation.
+#
+# To be updated by the AI/ML teammate.
