@@ -1,13 +1,19 @@
 # PharmaTrace AI — AI/ML Research & Integration Documentation
 
-This directory is designated for research documentation, dataset schemas, model evaluation benchmarks, and architectural integration guides authored by the AI/ML developer.
+This directory provides the research methodology, dataset engineering specifications, proposed Graph Neural Network (GNN) model architectures, and FastAPI microservice integration interfaces authored for the `ai-service/` module.
+
+---
 
 ## Documentation Index & Status
 
-| Document Section | Intended Content & Scope | Status |
+| Document | Description & Scope | Status |
 | :--- | :--- | :---: |
-| **1. AI Research Documentation** | Methodology, problem formulation, graph representation learning theory, literature review, and GNN architectural design decisions. | *Pending* |
-| **2. Dataset Documentation** | Data extraction specifications from MariaDB, graph feature engineering pipeline, entity-relationship to graph-node mapping, and synthetic generation methodologies. | *Pending* |
-| **3. Model Evaluation & Benchmarks** | Baseline comparisons, detection precision/recall/F1 metrics, confusion matrices, and anomaly score distribution analysis. | *Pending* |
-| **4. FastAPI Integration Documentation** | API specifications, request/response payload contracts, inter-service authentication with Express, and deployment instructions. | *Pending* |
-| **5. Model Card** | Formal machine learning model card documenting intended use, model architecture, training parameters, performance characteristics, limitations, and ethical considerations. | *Pending* |
+| [**1. AI Research Methodology**](research-methodology.md) | Problem formulation, graph representation learning theory, literature review, and GNN architectural design decisions. | **Completed** |
+| [**2. AI Dataset Strategy**](dataset-strategy.md) | Relational-to-graph ETL pipeline from MariaDB, graph feature engineering, and synthetic topological fraud generators. | **Completed** |
+| [**3. Proposed GNN Model Architecture**](model-architecture.md) | Heterogeneous GNN message-passing formulation, focal loss, target benchmark matrix, and GNNExplainer interpretability. | **Completed** |
+| [**4. FastAPI Integration & Contract**](fastapi-integration.md) | Microservice topology, REST API payloads, internal authentication, latency budgets, and Circuit Breaker fallback protocols. | **Completed** |
+
+---
+
+## Development Scope & Attribution Notice
+The advanced AI/ML research and model implementation described in these documents is being conducted separately by the dedicated AI/ML engineer on the team within the `ai-service/` directory. The core full-stack platform (Milestones M1–M9) is 100% operational and independently verified using the deterministic heuristic screening engine in `server/src/services/investigator.service.js`.
